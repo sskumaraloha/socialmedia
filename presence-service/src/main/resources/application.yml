@@ -17,6 +17,7 @@ spring:
       acks: all
       properties:
         enable.idempotence: true
+        max.block.ms: 3000
 
 server:
   port: 8087

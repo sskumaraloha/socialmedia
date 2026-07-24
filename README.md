@@ -120,9 +120,33 @@ auto-configures, with zero per-service setup:
 - **Logs**: structured JSON to stdout, correlated via `traceId` — ship them to your log
   aggregator of choice (Loki/ELK) via the container runtime; no code changes needed.
 
-## What's intentionally not implemented yet
+## Service implementation status
 
-This is the *project structure* — build system, service skeletons, shared infrastructure,
-and local dev environment. Domain logic (entities, repositories, controllers, Kafka
-producers/consumers, WebSocket handlers, security filter chains) is the next phase, built
-service by service on top of this scaffold.
+| Service | Status |
+|---|---|
+| `auth-service` | **Fully implemented** — see below |
+| everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
+
+### `auth-service`
+
+JWT access tokens + rotating opaque refresh tokens (with reuse detection — a replayed,
+already-rotated refresh token revokes every session for that account), OAuth2 login
+(Google/GitHub) with account linking, an alternative Keycloak resource-server profile
+(`SPRING_PROFILES_ACTIVE=keycloak`), TOTP-based 2FA with QR enrollment, QR-code login
+(scan-to-authenticate from an already-logged-in device), email verification and
+forgot/reset password (token-generation + Kafka event only — actual sending is
+notification-service's job once built), device and session management, login history,
+audit logs, and a Redis-backed rate limiter on the sensitive endpoints. Clean-architecture
+layering (`domain` / `dto` / `repository` / `service` / `controller` / `security` /
+`event` / `config`), Flyway-managed schema, unit tests (`./gradlew :auth-service:test`,
+no external services required) and Testcontainers integration tests
+(`./gradlew :auth-service:integrationTest`, requires a Docker daemon).
+
+This was built and then verified against a real, locally running instance (native
+Postgres/Redis, not just unit tests) — that process caught and fixed several bugs unit
+tests alone missed: a null `AuthProvider` on registration, `KafkaProducer.send()` blocking
+the request thread for up to 60s when the broker is unreachable, missing
+`@EnableJpaAuditing` (so `createdAt`/`updatedAt` were silently null), a Jackson
+polymorphic-typing mismatch in the Redis cache layer, and a 2FA challenge token that never
+actually reached the client because it was being routed through a generic exception
+handler that didn't know about it.
