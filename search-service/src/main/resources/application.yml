@@ -1,0 +1,55 @@
+spring:
+  application:
+    name: search-service
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: search-service
+      auto-offset-reset: earliest
+      properties:
+        spring.json.trusted.packages: "com.socialmedia.*"
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+
+server:
+  port: 8088
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: search-service
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+logging:
+  level:
+    root: INFO
+    com.socialmedia: DEBUG
+
+app:
+  search:
+    opensearch:
+      uris: http://localhost:9200

@@ -1,0 +1,301 @@
+name: socialmedia
+
+networks:
+  socialmedia-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+  kafka_data:
+  opensearch_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+
+x-service-defaults: &service-defaults
+  networks: [socialmedia-net]
+  restart: unless-stopped
+  environment: &service-env
+    SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker}
+    DB_USERNAME: ${DB_USERNAME:-postgres}
+    DB_PASSWORD: ${DB_PASSWORD:-postgres}
+    MONGO_USERNAME: ${MONGO_USERNAME:-root}
+    MONGO_PASSWORD: ${MONGO_PASSWORD:-example}
+    REDIS_PASSWORD: ${REDIS_PASSWORD:-redis}
+    JWT_SECRET: ${JWT_SECRET}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-media}
+    FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH:-/secrets/firebase-service-account.json}
+    STRIPE_API_KEY: ${STRIPE_API_KEY:-sk_test_change_me}
+    STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_change_me}
+
+services:
+
+  # ----------------------------------------------------------------------
+  # Infrastructure
+  # ----------------------------------------------------------------------
+
+  postgres:
+    image: postgres:16-alpine
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES:-auth_db,user_db,chat_db,media_db,notification_db,payment_db}
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongodb:
+    image: mongo:7
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-example}
+    ports: ["27017:27017"]
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-redis}"]
+    ports: ["6379:6379"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-redis} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: bitnami/kafka:3.7
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: "0"
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports: ["9092:9092"]
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  opensearch:
+    image: opensearchproject/opensearch:2.17.0
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: ${OPENSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
+    ports: ["9200:9200"]
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  minio:
+    image: minio/minio:latest
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  zipkin:
+    image: openzipkin/zipkin:latest
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    ports: ["9411:9411"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:latest
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on:
+      - prometheus
+
+  # ----------------------------------------------------------------------
+  # Application services
+  # ----------------------------------------------------------------------
+
+  gateway-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: gateway-service/Dockerfile }
+    ports: ["8080:8080"]
+    environment:
+      <<: *service-env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  auth-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: auth-service/Dockerfile }
+    ports: ["8081:8081"]
+    environment:
+      <<: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  user-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: user-service/Dockerfile }
+    ports: ["8082:8082"]
+    environment:
+      <<: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  chat-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: chat-service/Dockerfile }
+    ports: ["8083:8083"]
+    environment:
+      <<: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  message-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: message-service/Dockerfile }
+    ports: ["8084:8084"]
+    environment:
+      <<: *service-env
+    depends_on:
+      mongodb: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  media-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: media-service/Dockerfile }
+    ports: ["8085:8085"]
+    environment:
+      <<: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      minio: { condition: service_healthy }
+
+  notification-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: notification-service/Dockerfile }
+    ports: ["8086:8086"]
+    environment:
+      <<: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  presence-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: presence-service/Dockerfile }
+    ports: ["8087:8087"]
+    environment:
+      <<: *service-env
+    depends_on:
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  search-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: search-service/Dockerfile }
+    ports: ["8088:8088"]
+    environment:
+      <<: *service-env
+    depends_on:
+      opensearch: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  ai-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: ai-service/Dockerfile }
+    ports: ["8089:8089"]
+    environment:
+      <<: *service-env
+    depends_on:
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  payment-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: payment-service/Dockerfile }
+    ports: ["8090:8090"]
+    environment:
+      <<: *service-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  analytics-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: analytics-service/Dockerfile }
+    ports: ["8091:8091"]
+    environment:
+      <<: *service-env
+    depends_on:
+      mongodb: { condition: service_healthy }
+      kafka: { condition: service_healthy }
