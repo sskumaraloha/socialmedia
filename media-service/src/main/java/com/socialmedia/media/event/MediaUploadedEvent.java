@@ -1,0 +1,8 @@
+package com.socialmedia.media.event;
+
+import com.socialmedia.media.domain.MediaKind;
+import java.time.Instant;
+import java.util.UUID;
+
+public record MediaUploadedEvent(UUID mediaId, UUID ownerId, MediaKind kind, Instant occurredAt) {
+}

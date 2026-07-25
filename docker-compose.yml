@@ -150,6 +150,18 @@ services:
       timeout: 5s
       retries: 10
 
+  clamav:
+    image: clamav/clamav:stable
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    ports: ["3310:3310"]
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
   zipkin:
     image: openzipkin/zipkin:latest
     networks: [socialmedia-net]
@@ -248,6 +260,7 @@ services:
       postgres: { condition: service_healthy }
       kafka: { condition: service_healthy }
       minio: { condition: service_healthy }
+      clamav: { condition: service_started }
 
   notification-service:
     <<: *service-defaults

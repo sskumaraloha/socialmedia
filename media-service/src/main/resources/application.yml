@@ -14,6 +14,9 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -65,6 +68,9 @@ logging:
     com.socialmedia: DEBUG
 
 app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}
   media:
     s3:
       endpoint: http://localhost:9000
@@ -73,3 +79,18 @@ app:
       access-key: ${AWS_ACCESS_KEY_ID:minioadmin}
       secret-key: ${AWS_SECRET_ACCESS_KEY:minioadmin}
       path-style-access: true
+      presign-expiry-minutes: 15
+    cdn:
+      base-url: ${MEDIA_CDN_BASE_URL:}
+    thumbnail:
+      width: 320
+      height: 320
+      quality: 0.75
+    video-compression:
+      enabled: true
+      timeout-seconds: 120
+    virus-scan:
+      host: ${CLAMAV_HOST:localhost}
+      port: ${CLAMAV_PORT:3310}
+      timeout-ms: 5000
+      fail-closed: false

@@ -129,6 +129,7 @@ auto-configures, with zero per-service setup:
 | `chat-service` | **Fully implemented** — see below |
 | `message-service` | **Fully implemented** — see below |
 | `presence-service` | **Fully implemented** — see below |
+| `media-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -312,3 +313,54 @@ reconnects landing on nodes that already have warm local state, not something a 
 service configures itself; client-side reconnect/backoff is a frontend concern. The Redis
 relay above is what makes those deployment choices *safe* - even without sticky sessions,
 correctness no longer depends on which node a client lands on, only latency does.
+
+### `media-service`
+
+Chunked, resumable uploads and signed URLs come largely for free from S3's own
+multipart-upload API (S3 and MinIO speak the same protocol) rather than being
+reimplemented: `POST /media/uploads` calls `CreateMultipartUpload` and returns a
+`mediaId`; `POST /media/uploads/{id}/parts/{n}` returns a presigned `UploadPart` URL so
+the client PUTs each chunk directly to the object store, never through this service's own
+memory; `GET /media/uploads/{id}/parts` calls `ListParts` so a reconnecting client knows
+exactly which chunks it still needs to (re-)send - that's the "resume" half, and it needs
+no extra bookkeeping since S3 already keeps an incomplete multipart upload addressable by
+its uploadId until explicitly completed or aborted. `POST /media/uploads/{id}/complete`
+finalizes it and kicks off processing.
+
+Processing (`MediaProcessingService`) runs off the request thread (`@Async`) so completing
+an upload doesn't block on however long scanning/thumbnailing/transcoding takes - the
+asset sits in `PROCESSING` until it finishes:
+- **Virus scan**: speaks clamd's INSTREAM protocol directly over a socket (no client
+  library) against a `ClamAvVirusScanService`. If clamd is unreachable it reports
+  `SCAN_UNAVAILABLE` rather than throwing; a `virus-scan.fail-closed` flag decides whether
+  that blocks the upload (defaults to fail-open, logged).
+- **Thumbnailing / image compression**: pure-Java (Thumbnailator) - no native dependency.
+- **Video compression**: best-effort `ffmpeg` via `ProcessBuilder`; if ffmpeg isn't on
+  `PATH` (true in this sandbox) the original file is kept and the asset still becomes
+  `READY`, just without a transcoded variant.
+- **CDN vs signed URLs**: `MediaUrlService` returns a CDN URL when this deployment has one
+  fronting the bucket (`MEDIA_CDN_BASE_URL` set) or a time-limited presigned S3 `GetObject`
+  URL otherwise - callers never need to know which.
+
+Real end-to-end testing caught a genuine AWS SDK dependency bug: booting the service threw
+`NoClassDefFoundError: TlsSocketStrategy` the moment the `S3Client` bean was constructed.
+The SDK's default sync HTTP client (Apache5HttpClient) needs `httpclient5` on the
+classpath, and while it's pulled in transitively, Spring Boot's own dependency-management
+BOM (imported by the shared Gradle convention plugin for unrelated reasons) conflict-
+resolves it down to `5.3.1` - a version that predates the `TlsSocketStrategy` class the
+Apache5 client relies on. Fixed by switching to the SDK's URL Connection HTTP client
+instead (`software.amazon.awssdk:url-connection-client`, wired explicitly via
+`.httpClientBuilder(...)`), which has no third-party HTTP library in the build graph to
+conflict over. Re-verified by booting the service for real: it now reaches all the way to
+attempting a genuine `Connection refused` against a MinIO endpoint that doesn't exist in
+this sandbox (rather than failing at bean construction) - proof the client itself is wired
+correctly, with only the storage backend missing.
+
+Like message-service (MongoDB) and the ClamAV/ffmpeg dependencies above, MinIO isn't
+running in this sandbox (no Docker daemon, and downloading a MinIO binary directly was
+blocked by this environment's egress policy the same way MongoDB's was) so the full
+upload → scan → thumbnail pipeline couldn't be exercised against a real object store here.
+Verification is unit tests (13, covering ownership checks, the complete/abort lifecycle,
+and MediaProcessingService's branches: clean image → thumbnail, infected → quarantine +
+delete, scan-unavailable fail-open vs fail-closed, and video-compression failure still
+leaving the asset usable) plus the real boot-and-auth-and-S3-wiring check described above.
