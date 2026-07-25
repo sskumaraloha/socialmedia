@@ -21,6 +21,7 @@ dependencies {
     compileOnly("org.springdoc:springdoc-openapi-starter-common:2.6.0")
     compileOnly("org.springframework.boot:spring-boot-starter-data-jpa")
     compileOnly("org.springframework.boot:spring-boot-starter-security")
+    compileOnly("org.springframework:spring-messaging")
 
     annotationProcessor("org.springframework.boot:spring-boot-autoconfigure-processor")
 
@@ -28,4 +29,5 @@ dependencies {
     testImplementation("jakarta.servlet:jakarta.servlet-api")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jpa")
     testImplementation("org.springframework.boot:spring-boot-starter-security")
+    testImplementation("org.springframework:spring-messaging")
 }

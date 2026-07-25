@@ -1,4 +1,4 @@
-package com.socialmedia.chat.websocket;
+package com.socialmedia.message.websocket;
 
 import com.socialmedia.common.security.JwtValidator;
 import com.socialmedia.common.websocket.JwtStompChannelInterceptor;
@@ -11,11 +11,10 @@ import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
 /**
- * A single-node in-memory STOMP broker for chat-metadata notifications (member added,
- * chat renamed, unread count changed). This does NOT fan out across chat-service
- * instances - horizontally-scaled real-time delivery (Redis pub/sub relay so a client
- * connected to node A sees an event produced on node B) is message-service /
- * presence-service's job (task #10, the platform-wide WebSocket scaling architecture).
+ * A single-node in-memory STOMP broker for message delivery (new message, typing
+ * indicator, receipts). Same caveat as chat-service's WebSocketConfig: this does not fan
+ * out across horizontally-scaled message-service instances - that's the platform-wide
+ * WebSocket-scaling architecture (task #10).
  */
 @Configuration
 @EnableWebSocketMessageBroker
@@ -34,8 +33,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws/chat").setAllowedOriginPatterns("*").withSockJS();
-        registry.addEndpoint("/ws/chat").setAllowedOriginPatterns("*");
+        registry.addEndpoint("/ws/messages").setAllowedOriginPatterns("*").withSockJS();
+        registry.addEndpoint("/ws/messages").setAllowedOriginPatterns("*");
     }
 
     @Override

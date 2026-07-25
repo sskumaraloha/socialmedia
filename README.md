@@ -127,6 +127,7 @@ auto-configures, with zero per-service setup:
 | `auth-service` | **Fully implemented** — see below |
 | `user-service` | **Fully implemented** — see below |
 | `chat-service` | **Fully implemented** — see below |
+| `message-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -217,3 +218,53 @@ group-chat → permission-denied → owner-override → mute/archive → pin/unp
 delete lifecycle over HTTP with locally-signed JWTs, then hand-produced a `message.sent.v1`
 Kafka message and confirmed the unread counter incremented for every member except the
 sender and the chat-list preview updated live.
+
+### `message-service`
+
+The only MongoDB-backed service in the platform (per the architecture doc's two-data-
+plane split: Postgres for anything relational/identity-shaped, MongoDB for high-volume,
+schema-flexible, append-mostly message documents). All six content types (text, image,
+video, audio, document, GIF), reply, forward (carries the original `forwardedFromMessageId`
+through even across a second forward, so it always points at the true original), edit,
+delete-for-me vs delete-for-everyone, scheduled messages, self-destructing messages,
+reactions (one active emoji per user, upsert-on-change), delivery/read receipts, starred
+messages (personal bookmarks, separate from chat-service's chat-wide pinned messages),
+per-chat-per-user drafts, and a typing indicator over WebSocket. Reactions and receipts
+are embedded directly in the message document rather than modeled as separate
+collections/tables - a natural fit for MongoDB that a relational schema wouldn't allow as
+cleanly.
+
+Message content is encrypted at rest with AES-256-GCM (`MessageEncryptionService`) - this
+is application-level encryption, not end-to-end: the server holds the key and can decrypt,
+since there's no client-side key-exchange infrastructure in this backend-only project. It
+protects content if the MongoDB data files or backups are exfiltrated without the
+application's secret store.
+
+Every send/list/get/forward is gated by a **synchronous** authoritative check against
+chat-service (`ChatMembershipClient`, using Spring's `RestClient`, forwarding the caller's
+own bearer token to chat-service's existing `GET /chats/{chatId}` - reusing its
+membership/permission logic instead of duplicating it, and getting the full member list
+back in the same call for immediate WebSocket fan-out). Higher-frequency, lower-risk
+actions (reactions, receipts) are instead gated against a local, eventually-consistent
+`ChatMembership` mirror kept current by consuming chat-service's `chat.created.v1` /
+`chat.member.added.v1` / `chat.member.removed.v1` / `chat.deleted.v1` events - the same
+forward-declared-contract pattern used throughout this platform, avoiding a synchronous
+call on every reaction or read receipt. That same mirror also drives the typing-indicator
+WebSocket fan-out (`/app/chats/{chatId}/typing` → `/user/queue/message-events`), reusing
+the STOMP-over-JWT infrastructure that was promoted from chat-service into
+`common-library` (`JwtStompChannelInterceptor`, `StompUserPrincipal`) the moment a second
+service needed it.
+
+Publishes `message.sent.v1` matching the wire contract chat-service already declared it
+consumes (see chat-service's section above) - scheduled messages publish it only once
+they become due, via a lightweight `@Scheduled` poller (`MessageMaintenanceScheduler`),
+which also purges self-destructing messages past their expiry.
+
+Unlike the previous services, this one could not be verified against a real running
+instance in this sandbox: PostgreSQL/Redis/Kafka were reachable as native installs, but
+MongoDB was not (no package available, and downloading a binary was blocked by this
+environment's egress policy). Verification here is unit tests only (13, covering
+encryption round-tripping through the mock boundary, the membership-check failure path,
+scheduled/self-destruct timing, reaction upsert, and delete-for-me vs delete-for-everyone)
+plus a Testcontainers integration test that compiles but - like every `*IT` test in this
+repo - needs a Docker daemon this sandbox doesn't have.

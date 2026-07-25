@@ -230,9 +230,11 @@ services:
     ports: ["8084:8084"]
     environment:
       <<: *service-env
+      CHAT_SERVICE_BASE_URL: http://chat-service:8083
     depends_on:
       mongodb: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      chat-service: { condition: service_started }
 
   media-service:
     <<: *service-defaults
