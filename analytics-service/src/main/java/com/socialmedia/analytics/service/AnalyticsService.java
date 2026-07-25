@@ -1,5 +1,6 @@
 package com.socialmedia.analytics.service;
 
+import com.socialmedia.analytics.dto.response.AuditLogResponse;
 import com.socialmedia.analytics.dto.response.DashboardResponse;
 import com.socialmedia.analytics.dto.response.DauResponse;
 import com.socialmedia.analytics.dto.response.GrowthStatsResponse;
@@ -9,6 +10,9 @@ import com.socialmedia.analytics.dto.response.RetentionResponse;
 import com.socialmedia.analytics.dto.response.RevenueStatsResponse;
 import com.socialmedia.analytics.dto.response.StorageStatsResponse;
 import java.time.LocalDate;
+import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 public interface AnalyticsService {
 
@@ -27,4 +31,6 @@ public interface AnalyticsService {
     RetentionResponse getRetention(LocalDate cohortWeekStart, int weeksLater);
 
     DashboardResponse getDashboard(LocalDate date);
+
+    Page<AuditLogResponse> getAuditLogs(UUID actorUserId, String action, String targetType, Pageable pageable);
 }

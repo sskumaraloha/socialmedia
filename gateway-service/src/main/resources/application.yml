@@ -6,6 +6,217 @@ spring:
       host: localhost
       port: 6379
       password: ${REDIS_PASSWORD:}
+  cloud:
+    gateway:
+      routes:
+        # More specific than chat-service's own /api/v1/chats/** route below, so this must
+        # be listed first - Spring Cloud Gateway evaluates routes in declaration order and
+        # takes the first predicate match.
+        - id: message-service-chat-messages
+          uri: ${MESSAGE_SERVICE_BASE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/chats/*/messages/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: message-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@clientKeyResolver}"
+        - id: message-service
+          uri: ${MESSAGE_SERVICE_BASE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/messages/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: message-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@clientKeyResolver}"
+        - id: auth-service
+          uri: ${AUTH_SERVICE_BASE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: auth-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@clientKeyResolver}"
+        - id: user-service
+          uri: ${USER_SERVICE_BASE_URL:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/users/**,/api/v1/blocks/**,/api/v1/contacts/**,/api/v1/mutes/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: user-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@clientKeyResolver}"
+        - id: chat-service
+          uri: ${CHAT_SERVICE_BASE_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/chats/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: chat-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@clientKeyResolver}"
+        - id: media-service
+          uri: ${MEDIA_SERVICE_BASE_URL:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/media/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: media-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 30
+                redis-rate-limiter.burstCapacity: 60
+                key-resolver: "#{@clientKeyResolver}"
+        - id: notification-service
+          uri: ${NOTIFICATION_SERVICE_BASE_URL:http://localhost:8086}
+          predicates:
+            - Path=/api/v1/notifications/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: notification-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@clientKeyResolver}"
+        - id: presence-service
+          uri: ${PRESENCE_SERVICE_BASE_URL:http://localhost:8087}
+          predicates:
+            - Path=/api/v1/presence/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: presence-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                key-resolver: "#{@clientKeyResolver}"
+        - id: search-service
+          uri: ${SEARCH_SERVICE_BASE_URL:http://localhost:8088}
+          predicates:
+            - Path=/api/v1/search/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: search-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@clientKeyResolver}"
+        - id: ai-service
+          uri: ${AI_SERVICE_BASE_URL:http://localhost:8089}
+          predicates:
+            - Path=/api/v1/ai/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: ai-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+                key-resolver: "#{@clientKeyResolver}"
+        - id: payment-service
+          uri: ${PAYMENT_SERVICE_BASE_URL:http://localhost:8090}
+          predicates:
+            - Path=/api/v1/payments/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: payment-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@clientKeyResolver}"
+        - id: analytics-service
+          uri: ${ANALYTICS_SERVICE_BASE_URL:http://localhost:8091}
+          predicates:
+            - Path=/api/v1/analytics/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: analytics-service
+                fallbackUri: forward:/fallback
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@clientKeyResolver}"
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 5
+    instances:
+      auth-service:
+        base-config: default
+      user-service:
+        base-config: default
+      chat-service:
+        base-config: default
+      message-service:
+        base-config: default
+      media-service:
+        base-config: default
+      notification-service:
+        base-config: default
+      presence-service:
+        base-config: default
+      search-service:
+        base-config: default
+      ai-service:
+        base-config: default
+      payment-service:
+        base-config: default
+      analytics-service:
+        base-config: default
+  timelimiter:
+    configs:
+      default:
+        timeout-duration: 10s
 
 server:
   port: 8080

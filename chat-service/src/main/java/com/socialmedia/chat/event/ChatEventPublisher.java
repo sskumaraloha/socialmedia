@@ -7,63 +7,73 @@ import com.socialmedia.chat.event.outgoing.ChatMemberAddedEvent;
 import com.socialmedia.chat.event.outgoing.ChatMemberRemovedEvent;
 import com.socialmedia.chat.event.outgoing.ChatUpdatedEvent;
 import com.socialmedia.chat.event.outgoing.MessagePinnedEvent;
+import com.socialmedia.chat.outbox.OutboxEvent;
+import com.socialmedia.chat.outbox.OutboxEventRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
+/**
+ * Stages every outgoing event into the transactional outbox instead of calling Kafka
+ * directly - the insert below runs in the SAME transaction as the domain write that
+ * triggered it (ChatServiceImpl is class-level @Transactional), so a chat being created/
+ * updated/deleted and the fact that an event needs to be published about it either both
+ * commit or both roll back together. Unlike the old direct-send version, a failure here
+ * is NOT caught and logged: since staging is now just a local database write sharing the
+ * caller's transaction, letting it throw and roll back the whole operation is exactly
+ * right - the alternative (swallowing it) would silently corrupt the outbox guarantee by
+ * committing the domain change without ever queuing its event. See
+ * OutboxEventPublisherScheduler for the separate poller that actually delivers these to Kafka.
+ */
 @Component
 public class ChatEventPublisher {
 
-    private static final Logger log = LoggerFactory.getLogger(ChatEventPublisher.class);
+    private final ObjectMapper objectMapper;
+    private final OutboxEventRepository outboxEventRepository;
 
-    private final KafkaTemplate<String, Object> kafkaTemplate;
-
-    public ChatEventPublisher(KafkaTemplate<String, Object> kafkaTemplate) {
-        this.kafkaTemplate = kafkaTemplate;
+    public ChatEventPublisher(ObjectMapper objectMapper, OutboxEventRepository outboxEventRepository) {
+        this.objectMapper = objectMapper;
+        this.outboxEventRepository = outboxEventRepository;
     }
 
     public void publishChatCreated(Chat chat, Set<UUID> memberIds) {
-        send(ChatTopics.CHAT_CREATED, chat.getId().toString(),
+        stage(ChatTopics.CHAT_CREATED, chat.getId().toString(),
                 new ChatCreatedEvent(chat.getId(), chat.getType(), chat.getName(), chat.getCreatedBy(), memberIds, Instant.now()));
     }
 
     public void publishChatUpdated(Chat chat) {
-        send(ChatTopics.CHAT_UPDATED, chat.getId().toString(),
+        stage(ChatTopics.CHAT_UPDATED, chat.getId().toString(),
                 new ChatUpdatedEvent(chat.getId(), chat.getName(), chat.getDescription(), chat.getAvatarUrl(), Instant.now()));
     }
 
     public void publishMemberAdded(UUID chatId, UUID userId, UUID addedBy) {
-        send(ChatTopics.CHAT_MEMBER_ADDED, chatId.toString(),
+        stage(ChatTopics.CHAT_MEMBER_ADDED, chatId.toString(),
                 new ChatMemberAddedEvent(chatId, userId, addedBy, Instant.now()));
     }
 
     public void publishMemberRemoved(UUID chatId, UUID userId, UUID removedBy) {
-        send(ChatTopics.CHAT_MEMBER_REMOVED, chatId.toString(),
+        stage(ChatTopics.CHAT_MEMBER_REMOVED, chatId.toString(),
                 new ChatMemberRemovedEvent(chatId, userId, removedBy, Instant.now()));
     }
 
     public void publishChatDeleted(UUID chatId, UUID deletedBy) {
-        send(ChatTopics.CHAT_DELETED, chatId.toString(), new ChatDeletedEvent(chatId, deletedBy, Instant.now()));
+        stage(ChatTopics.CHAT_DELETED, chatId.toString(), new ChatDeletedEvent(chatId, deletedBy, Instant.now()));
     }
 
     public void publishMessagePinned(UUID chatId, UUID messageId, UUID pinnedBy) {
-        send(ChatTopics.CHAT_MESSAGE_PINNED, chatId.toString(),
+        stage(ChatTopics.CHAT_MESSAGE_PINNED, chatId.toString(),
                 new MessagePinnedEvent(chatId, messageId, pinnedBy, Instant.now()));
     }
 
-    private void send(String topic, String key, Object payload) {
+    private void stage(String topic, String key, Object payload) {
         try {
-            kafkaTemplate.send(topic, key, payload).whenComplete((result, ex) -> {
-                if (ex != null) {
-                    log.warn("Failed to publish event to topic {} (key={}): {}", topic, key, ex.getMessage());
-                }
-            });
-        } catch (Exception ex) {
-            log.warn("Failed to publish event to topic {} (key={}): {}", topic, key, ex.getMessage());
+            String json = objectMapper.writeValueAsString(payload);
+            outboxEventRepository.save(new OutboxEvent(topic, key, payload.getClass().getSimpleName(), json));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize outbox event for topic " + topic, e);
         }
     }
 }

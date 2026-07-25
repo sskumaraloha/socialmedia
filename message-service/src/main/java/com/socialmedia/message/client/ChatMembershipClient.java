@@ -1,6 +1,9 @@
 package com.socialmedia.message.client;
 
 import com.socialmedia.message.exception.NotAChatMemberException;
+import io.github.resilience4j.bulkhead.annotation.Bulkhead;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -19,6 +22,13 @@ import org.springframework.web.client.RestClient;
  * here avoids duplicating chat-service's membership logic. As a bonus, the same call
  * returns the full member list, which is exactly what's needed to fan out the new
  * message over WebSocket without waiting for the (eventually-consistent) local mirror.
+ *
+ * <p>The only synchronous inter-service call in this platform, and so the one place this
+ * platform wraps with Circuit Breaker + Retry + Bulkhead (resilience4j, annotation-driven):
+ * a chat-service outage or slowdown must not cascade into every message-service request
+ * thread blocking or piling up. NotAChatMemberException is excluded from all three
+ * (see application.yml's ignoreExceptions) since a 403/404 from chat-service is a normal
+ * business outcome, not a technical failure worth retrying or counting against the breaker.
  */
 @Component
 public class ChatMembershipClient {
@@ -31,6 +41,9 @@ public class ChatMembershipClient {
         this.restClient = RestClient.builder().baseUrl(baseUrl).build();
     }
 
+    @CircuitBreaker(name = "chat-service", fallbackMethod = "fetchMemberIdsFallback")
+    @Retry(name = "chat-service", fallbackMethod = "fetchMemberIdsFallback")
+    @Bulkhead(name = "chat-service", fallbackMethod = "fetchMemberIdsFallback")
     public Set<UUID> fetchMemberIds(UUID chatId, String bearerAuthorizationHeader) {
         try {
             ChatMembersView view = restClient.get()
@@ -41,9 +54,16 @@ public class ChatMembershipClient {
             return view.members().stream().map(ChatMembersView.ChatMemberView::userId).collect(Collectors.toSet());
         } catch (HttpClientErrorException.Forbidden | HttpClientErrorException.NotFound e) {
             throw new NotAChatMemberException();
-        } catch (Exception e) {
-            log.error("Failed to verify chat membership via chat-service for chat {}: {}", chatId, e.getMessage());
-            throw new ChatServiceUnavailableException();
         }
+    }
+
+    @SuppressWarnings("unused")
+    private Set<UUID> fetchMemberIdsFallback(UUID chatId, String bearerAuthorizationHeader, Throwable t) {
+        if (t instanceof NotAChatMemberException notAChatMemberException) {
+            throw notAChatMemberException;
+        }
+        log.error("chat-service unavailable (circuit open, retries exhausted, or at capacity) while verifying "
+                + "membership for chat {}: {}", chatId, t.getMessage());
+        throw new ChatServiceUnavailableException();
     }
 }

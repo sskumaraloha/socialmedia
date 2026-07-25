@@ -1,5 +1,6 @@
 package com.socialmedia.user.service.impl;
 
+import com.socialmedia.common.audit.AuditEventPublisher;
 import com.socialmedia.common.exception.ResourceNotFoundException;
 import com.socialmedia.user.domain.UserProfile;
 import com.socialmedia.user.dto.request.UpdatePrivacyRequest;
@@ -20,6 +21,7 @@ import com.socialmedia.user.service.UserProfileService;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.data.domain.Page;
@@ -40,10 +42,12 @@ public class UserProfileServiceImpl implements UserProfileService {
     private final MutedUserRepository mutedUserRepository;
     private final UserProfileMapper mapper;
     private final UserEventPublisher eventPublisher;
+    private final AuditEventPublisher auditEventPublisher;
 
     public UserProfileServiceImpl(UserProfileRepository userProfileRepository, FollowRepository followRepository,
             ContactRepository contactRepository, BlockedUserRepository blockedUserRepository,
-            MutedUserRepository mutedUserRepository, UserProfileMapper mapper, UserEventPublisher eventPublisher) {
+            MutedUserRepository mutedUserRepository, UserProfileMapper mapper, UserEventPublisher eventPublisher,
+            AuditEventPublisher auditEventPublisher) {
         this.userProfileRepository = userProfileRepository;
         this.followRepository = followRepository;
         this.contactRepository = contactRepository;
@@ -51,6 +55,7 @@ public class UserProfileServiceImpl implements UserProfileService {
         this.mutedUserRepository = mutedUserRepository;
         this.mapper = mapper;
         this.eventPublisher = eventPublisher;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     @Override
@@ -154,6 +159,11 @@ public class UserProfileServiceImpl implements UserProfileService {
         profile.setMessageableBy(request.messageableBy());
         profile.setAddableToGroupsBy(request.addableToGroupsBy());
         userProfileRepository.save(profile);
+        auditEventPublisher.publish(userId, "PRIVACY_SETTINGS_UPDATED", "USER", userId.toString(), Map.of(
+                "onlineStatusVisibility", request.onlineStatusVisibility().name(),
+                "lastSeenVisibility", request.lastSeenVisibility().name(),
+                "messageableBy", request.messageableBy().name(),
+                "addableToGroupsBy", request.addableToGroupsBy().name()));
         return mapper.toPrivacyResponse(profile);
     }
 

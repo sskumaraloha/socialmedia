@@ -39,7 +39,9 @@ import com.socialmedia.auth.service.LoginHistoryService;
 import com.socialmedia.auth.service.SessionCacheService;
 import com.socialmedia.auth.service.TwoFactorAuthService;
 import com.socialmedia.auth.service.TwoFactorChallengeCache;
+import com.socialmedia.common.lock.RedisDistributedLock;
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -50,6 +52,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 @ExtendWith(MockitoExtension.class)
@@ -69,14 +73,20 @@ class AuthServiceImplTest {
     @Mock private TwoFactorChallengeCache twoFactorChallengeCache;
     @Mock private EmailVerificationService emailVerificationService;
     @Mock private UserMapper userMapper;
+    @Mock private StringRedisTemplate redisTemplate;
+    @Mock private ValueOperations<String, String> valueOperations;
 
     private AuthServiceImpl authService;
 
     @BeforeEach
     void setUp() {
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(valueOperations.setIfAbsent(any(), any(), any(Duration.class))).thenReturn(true);
+        RedisDistributedLock distributedLock = new RedisDistributedLock(redisTemplate);
+
         authService = new AuthServiceImpl(userRepository, refreshTokenRepository, sessionRepository, passwordEncoder,
                 jwtService, sessionCacheService, deviceService, loginHistoryService, auditLogService, eventPublisher,
-                twoFactorAuthService, twoFactorChallengeCache, emailVerificationService, userMapper);
+                twoFactorAuthService, twoFactorChallengeCache, emailVerificationService, userMapper, distributedLock);
 
         // Shared defaults used by most (not necessarily all) tests below - lenient so a
         // test that never reaches a given call path doesn't fail on "unnecessary stubbing".

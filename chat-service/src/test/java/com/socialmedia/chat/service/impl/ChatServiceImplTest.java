@@ -23,6 +23,7 @@ import com.socialmedia.chat.repository.ChatMemberRepository;
 import com.socialmedia.chat.repository.ChatRepository;
 import com.socialmedia.chat.repository.PinnedMessageRepository;
 import com.socialmedia.chat.websocket.ChatWebSocketNotifier;
+import com.socialmedia.common.audit.AuditEventPublisher;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -42,13 +43,15 @@ class ChatServiceImplTest {
     @Mock private PinnedMessageRepository pinnedMessageRepository;
     @Mock private ChatEventPublisher eventPublisher;
     @Mock private ChatWebSocketNotifier webSocketNotifier;
+    @Mock private GroupChatCreationSaga groupChatCreationSaga;
+    @Mock private AuditEventPublisher auditEventPublisher;
 
     private ChatServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ChatServiceImpl(chatRepository, chatMemberRepository, pinnedMessageRepository,
-                new ChatMapper(), eventPublisher, webSocketNotifier);
+                new ChatMapper(), eventPublisher, webSocketNotifier, groupChatCreationSaga, auditEventPublisher);
         lenient().when(chatMemberRepository.save(any(ChatMember.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

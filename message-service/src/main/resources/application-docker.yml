@@ -68,3 +68,28 @@ app:
 services:
   chat-service:
     base-url: ${CHAT_SERVICE_BASE_URL:http://chat-service:8083}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      chat-service:
+        register-health-indicator: true
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 5
+        ignore-exceptions:
+          - com.socialmedia.message.exception.NotAChatMemberException
+  retry:
+    instances:
+      chat-service:
+        max-attempts: 3
+        wait-duration: 200ms
+        ignore-exceptions:
+          - com.socialmedia.message.exception.NotAChatMemberException
+  bulkhead:
+    instances:
+      chat-service:
+        max-concurrent-calls: 10
+        max-wait-duration: 500ms

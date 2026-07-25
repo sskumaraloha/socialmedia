@@ -14,7 +14,7 @@ public interface ChatService {
 
     ChatDetailResponse createPrivateChat(UUID requesterId, UUID recipientId);
 
-    ChatDetailResponse createGroupChat(UUID requesterId, CreateGroupChatRequest request);
+    ChatDetailResponse createGroupChat(UUID requesterId, CreateGroupChatRequest request, String bearerAuthorizationHeader);
 
     ChatDetailResponse getChat(UUID chatId, UUID viewerId);
 

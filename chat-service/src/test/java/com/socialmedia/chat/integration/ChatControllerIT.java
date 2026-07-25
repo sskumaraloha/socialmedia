@@ -9,14 +9,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialmedia.chat.dto.request.AddMembersRequest;
 import com.socialmedia.chat.dto.request.CreateGroupChatRequest;
 import com.socialmedia.chat.dto.request.CreatePrivateChatRequest;
+import com.sun.net.httpserver.HttpServer;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import javax.crypto.SecretKey;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,6 +39,10 @@ import org.testcontainers.utility.DockerImageName;
  * Requires a Docker daemon - see auth-service's AuthControllerIT for why these are
  * gated behind the separate `integrationTest` task instead of the default `test` task.
  * Simulates auth-service-issued JWTs by signing them locally with the shared secret.
+ * Group chat creation now runs GroupChatCreationSaga, whose validation step calls
+ * user-service over HTTP - stubbed here with a bare com.sun.net.httpserver.HttpServer
+ * (JDK built-in, no new test dependency) that answers 200 OK to every GET, i.e. every
+ * invited member id is treated as a real user.
  */
 @Testcontainers
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
@@ -48,11 +56,30 @@ class ChatControllerIT {
             .withUsername("postgres")
             .withPassword("postgres");
 
+    private static HttpServer userServiceStub;
+
+    @BeforeAll
+    static void startUserServiceStub() throws Exception {
+        userServiceStub = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        userServiceStub.createContext("/api/v1/users", exchange -> {
+            exchange.sendResponseHeaders(200, 0);
+            exchange.getResponseBody().close();
+        });
+        userServiceStub.start();
+    }
+
+    @AfterAll
+    static void stopUserServiceStub() {
+        userServiceStub.stop(0);
+    }
+
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("services.user-service.base-url",
+                () -> "http://localhost:" + userServiceStub.getAddress().getPort());
     }
 
     @Autowired

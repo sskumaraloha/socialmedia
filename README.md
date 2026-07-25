@@ -134,6 +134,7 @@ auto-configures, with zero per-service setup:
 | `search-service` | **Fully implemented** — see below |
 | `ai-service` | **Fully implemented** — see below |
 | `analytics-service` | **Fully implemented** — see below |
+| `gateway-service` | **Routing, rate limiting, circuit breaking implemented** — see "Cross-cutting production-grade patterns" below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -558,3 +559,132 @@ media-service's existing outgoing event, mirrored by search-service's separate,
 already-shipped `originalFilename` addition to the same event for its own file-search
 feature - both changes verified not to regress chat-service's or media-service's own
 compile/test suites.
+
+### Cross-cutting production-grade patterns
+
+Thirteen concerns, each anchored to a real, working implementation somewhere in the
+codebase rather than a standalone demo - five of them (Tracing, Metrics, Logging,
+Prometheus, Grafana) were already built as part of every service's scaffolding from the
+start of this project; the other eight were built as part of this final pass.
+
+**Already in place (built earlier, confirmed still working):**
+
+- **Tracing** - Micrometer's Brave bridge + Zipkin reporter (`micrometer-tracing-bridge-brave`,
+  `zipkin-reporter-brave`) in `socialmedia.spring-service-conventions.gradle.kts`, wired into
+  every service via `management.tracing.sampling.probability` / `management.zipkin.tracing.endpoint`
+  in every `application.yml`. `docker-compose.yml` runs a real `zipkin` container.
+- **Metrics** - `micrometer-registry-prometheus`, same convention plugin; every service exposes
+  `/actuator/prometheus`, and `common-library`'s `ObservabilityConfig` tags every metric with
+  `application=<service-name>` so one Prometheus/Grafana stack can tell the 13 services apart.
+- **Logging** - `common-library/logback-spring.xml` emits structured JSON (`logstash-logback-encoder`)
+  in every non-local profile, with `CorrelationIdFilter` (servlet) populating an MDC `traceId` on
+  every request so log lines, `ApiError` responses, and traces all key off the same id.
+- **Prometheus** - `docker-compose.yml`'s `prometheus` service scrapes `/actuator/prometheus` on
+  all 13 services per `docker/prometheus/prometheus.yml`.
+- **Grafana** - `docker-compose.yml`'s `grafana` service, provisioned via
+  `docker/grafana/provisioning/` with one dashboard already checked in
+  (`docker/grafana/dashboards/services-overview.json`).
+
+**Built in this pass:**
+
+- **Rate Limiter** - two layers, deliberately not redundant. auth-service already had (from
+  its own original build) a fine-grained, per-endpoint `RateLimitFilter` guarding `/login` and
+  `/register` specifically against brute force. New in this pass: gateway-service - previously
+  a pure scaffold with the dependency present but zero routes - now has real
+  `spring.cloud.gateway.routes` for all 11 backend services (`gateway-service/src/main/resources/application.yml`),
+  each with a Redis-backed `RequestRateLimiter` filter keyed by client IP
+  (`config/GatewayConfig.clientKeyResolver`, since most abuse arrives unauthenticated - a
+  per-user key would miss exactly the traffic this exists to catch). Verified for real: booted
+  gateway-service and chat-service together, routed `GET /api/v1/chats` through the gateway to
+  a real backend (confirmed by chat-service's own 401), then fired 250 concurrent requests at
+  it - exactly 100 succeeded (the configured burst capacity) and the other 150 came back `429`
+  with `X-RateLimit-*` headers, straight from a real token bucket in real Redis.
+- **Circuit Breaker** - resilience4j, two flavors. gateway-service wraps every route in a
+  `CircuitBreaker` gateway filter falling back to a local `FallbackController` (`/fallback`) -
+  verified for real by pointing a route at a service that wasn't running and getting a clean,
+  uniform `503 SERVICE_UNAVAILABLE` instead of a raw connection-refused. message-service wraps
+  its one synchronous inter-service call - `ChatMembershipClient.fetchMemberIds`, the
+  authoritative membership check before accepting a message - with `@CircuitBreaker`
+  (resilience4j-spring-boot3's annotation form; needs `spring-boot-starter-aop` alongside it,
+  a real gap this session hit and fixed, since the annotations are silently inert without it).
+- **Retry** - notification-service already had Kafka-consumer-level retry+DLQ
+  (`DefaultErrorHandler`/`ExponentialBackOff`/`DeadLetterPublishingRecoverer`). New: message-service's
+  `ChatMembershipClient` also gets `@Retry` for the synchronous call itself, with
+  `NotAChatMemberException` (chat-service correctly saying "no") explicitly excluded via
+  `ignore-exceptions` so a legitimate 403/404 is never retried - only genuine technical
+  failures are. Verified for real with a Spring-context test
+  (`ChatMembershipClientResilienceTest`) proving a business exception reaches the stub exactly
+  once (no retry), and a second test (`ChatMembershipClientFallbackTest`) against an
+  unreachable host proving retries actually happen and the fallback method converts the final
+  failure into a clean `ChatServiceUnavailableException` rather than a raw `RestClientException`.
+- **Bulkhead** - `@Bulkhead` alongside the same `ChatMembershipClient` call, capping concurrent
+  in-flight calls to chat-service so a slow chat-service can't exhaust message-service's own
+  request-handling threads.
+- **Distributed Lock** - `common-library`'s new `RedisDistributedLock` (`SET NX PX` to acquire,
+  a Lua compare-and-delete script to release safely even past lease expiry), following the same
+  "library provides the class, service wires the bean itself" convention already established by
+  `RedisWebSocketRelay` - not every service uses Redis for this. Applied to auth-service's
+  `register()`: two concurrent registrations for the same email could previously both pass the
+  `existsByEmailIgnoreCase` check before either committed, and the loser would hit the
+  database's unique constraint as a raw, unmapped 500 instead of a clean 409. The lock
+  (keyed by lowercased email) closes that window. 5 unit tests in common-library cover
+  acquire/release, releasing even when the guarded action throws, and timing out cleanly
+  (`LockAcquisitionException`) when contended past the wait budget.
+- **Saga Pattern** - orchestration-style, in chat-service's group/channel creation
+  (`GroupChatCreationSaga` + `GroupChatCreationSagaSteps`), spanning chat-service (owns the
+  chat) and user-service (owns whether an invited member id is real). Deliberately creates the
+  chat *optimistically first*, then validates every invited member via user-service's
+  `GET /users/{id}` (already 404s an unknown user) - validating up front would add N sequential
+  HTTP round trips to every group chat's critical path for a case that's almost always fine;
+  this way only the rare invalid-member case pays for a compensating delete. Each step
+  (`createLocally`/`confirm`/`compensate`) runs in its own `REQUIRES_NEW` transaction on a
+  *separate* bean (`GroupChatCreationSagaSteps`, injected as a bean rather than called via
+  `this.` from the orchestrator) - Spring's AOP proxy only intercepts calls that arrive through
+  the bean, so self-invocation would have silently made `@Transactional` inert here, a classic
+  pitfall this design avoids deliberately. Verified for real, end to end: booted chat-service
+  and user-service together against native Postgres/Kafka, created a real user profile row,
+  created a group chat naming that real user as a member (201, chat + membership rows
+  persisted), then created a second group chat naming a nonexistent random UUID - got a clean
+  `400 INVALID_CHAT_MEMBER`, and confirmed via `psql` that zero rows were left behind for the
+  failed chat (the compensating transaction actually ran).
+- **Outbox Pattern** - chat-service, the service this session's investigation found doing a
+  textbook dual-write (`kafkaTemplate.send()` called directly inside a `@Transactional` method,
+  so the DB commit and the Kafka publish could diverge on a crash between them). Now: domain
+  writes stage an `OutboxEvent` row (`outbox_events` table, migration `V2__add_outbox_events.sql`)
+  in the *same* transaction as the domain change, and a separate `@Scheduled` poller
+  (`OutboxEventPublisherScheduler`, polling publisher pattern - simpler than CDC/Debezium at
+  this scale) delivers unpublished rows to Kafka and marks them published only after a
+  successful send, stopping (not skipping ahead) on the first failure to preserve per-aggregate
+  ordering. Reuses the service's one existing `KafkaTemplate<String, Object>` rather than a
+  second producer bean - an early attempt at a dedicated `String`-valued producer bean broke
+  Spring Boot's own autoconfigured template (`@ConditionalOnSingleCandidate(ProducerFactory.class)`
+  silently backs off once a second `ProducerFactory` bean exists), a real bug caught only by
+  booting the service for real and reading `APPLICATION FAILED TO START`. The fix - parsing the
+  outbox row's JSON string back into a Jackson `JsonNode` before sending - lets the existing
+  `JsonSerializer` write it out unchanged instead of double-encoding it as a quoted string.
+  Verified for real: the group-chat-saga smoke test above also confirmed the successful chat's
+  `ChatCreatedEvent` landed in the `outbox_events` table, was marked `published` within one poll
+  interval, and arrived on the real Kafka topic as clean, correctly-shaped JSON - while the
+  *compensated* chat correctly never got an outbox row at all, since staging only happens after
+  the saga's validation step succeeds.
+- **Audit** - a new, generic, cross-service audit trail, closing a gap the README's own Modules
+  table had promised since the start ("analytics-service - Usage analytics, **audit trail**").
+  `common-library`'s `AuditEventPublisher` (again, library-provides-the-class /
+  service-wires-the-bean, like the lock and the WebSocket relay) publishes a structured
+  `AuditEvent` (actor, action, target type/id, metadata, timestamp) to a shared
+  `audit.event.v1` topic; analytics-service consumes it into a new `audit_logs` Mongo
+  collection and exposes it via a new admin-only `GET /api/v1/analytics/audit-logs` endpoint
+  (filterable by actor/action/targetType, paginated). This is the one place in the platform
+  where a consuming service deserializes a shared type directly instead of a local mirror -
+  `AuditEvent` is deliberately a common-library wire contract every producer already imports to
+  construct it, not a domain object owned by one service, so mirroring it would just copy a
+  type meant to be shared. Wired into two real, new audit points: chat-service publishes
+  `CHAT_DELETED` (actor, chat type, member count) and user-service publishes
+  `PRIVACY_SETTINGS_UPDATED` (actor, the four new visibility settings) - auth-service's own,
+  richer, pre-existing `AuditLog` (password reset/2FA/device-revoke, with auth-specific fields)
+  is left as-is rather than migrated onto the generic type.
+
+None of this needed infrastructure this sandbox lacks - Redis, Postgres, and Kafka were all
+already running natively from earlier verification in this session, so every one of these
+patterns was exercised against a genuinely booted service (not just unit-tested in isolation)
+at least once, as described above.

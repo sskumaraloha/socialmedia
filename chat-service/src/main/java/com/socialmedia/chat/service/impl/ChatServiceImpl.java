@@ -19,17 +19,19 @@ import com.socialmedia.chat.repository.ChatRepository;
 import com.socialmedia.chat.repository.PinnedMessageRepository;
 import com.socialmedia.chat.service.ChatService;
 import com.socialmedia.chat.websocket.ChatWebSocketNotifier;
+import com.socialmedia.common.audit.AuditEventPublisher;
 import com.socialmedia.common.exception.BusinessException;
 import com.socialmedia.common.exception.ResourceNotFoundException;
 import java.time.Instant;
-import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -44,16 +46,21 @@ public class ChatServiceImpl implements ChatService {
     private final ChatMapper chatMapper;
     private final ChatEventPublisher eventPublisher;
     private final ChatWebSocketNotifier webSocketNotifier;
+    private final GroupChatCreationSaga groupChatCreationSaga;
+    private final AuditEventPublisher auditEventPublisher;
 
     public ChatServiceImpl(ChatRepository chatRepository, ChatMemberRepository chatMemberRepository,
             PinnedMessageRepository pinnedMessageRepository, ChatMapper chatMapper,
-            ChatEventPublisher eventPublisher, ChatWebSocketNotifier webSocketNotifier) {
+            ChatEventPublisher eventPublisher, ChatWebSocketNotifier webSocketNotifier,
+            GroupChatCreationSaga groupChatCreationSaga, AuditEventPublisher auditEventPublisher) {
         this.chatRepository = chatRepository;
         this.chatMemberRepository = chatMemberRepository;
         this.pinnedMessageRepository = pinnedMessageRepository;
         this.chatMapper = chatMapper;
         this.eventPublisher = eventPublisher;
         this.webSocketNotifier = webSocketNotifier;
+        this.groupChatCreationSaga = groupChatCreationSaga;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     @Override
@@ -78,24 +85,14 @@ public class ChatServiceImpl implements ChatService {
     }
 
     @Override
-    public ChatDetailResponse createGroupChat(UUID requesterId, CreateGroupChatRequest request) {
-        ChatType type = request.channel() ? ChatType.CHANNEL : ChatType.GROUP;
-        Chat chat = new Chat(type, request.name(), request.description(), requesterId, request.broadcastOnly());
-        chatRepository.save(chat);
-        chatMemberRepository.save(new ChatMember(chat.getId(), requesterId, ChatMemberRole.OWNER));
-
-        Set<UUID> allMemberIds = new LinkedHashSet<>(request.memberIds());
-        allMemberIds.remove(requesterId);
-        for (UUID memberId : allMemberIds) {
-            chatMemberRepository.save(new ChatMember(chat.getId(), memberId, ChatMemberRole.MEMBER));
-        }
-        allMemberIds.add(requesterId);
-
-        eventPublisher.publishChatCreated(chat, allMemberIds);
-        webSocketNotifier.notifyUsers(allMemberIds.stream().filter(id -> !id.equals(requesterId)).toList(),
-                "CHAT_CREATED", chat.getId());
-
-        return getChat(chat.getId(), requesterId);
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public ChatDetailResponse createGroupChat(UUID requesterId, CreateGroupChatRequest request, String bearerAuthorizationHeader) {
+        // NOT_SUPPORTED overrides the class-level @Transactional: this method must NOT hold a
+        // database transaction open of its own, since the saga it delegates to makes a
+        // synchronous HTTP call to user-service in between its (independently transactional)
+        // steps - see GroupChatCreationSaga's javadoc.
+        UUID chatId = groupChatCreationSaga.execute(requesterId, request, bearerAuthorizationHeader);
+        return getChat(chatId, requesterId);
     }
 
     @Override
@@ -185,6 +182,8 @@ public class ChatServiceImpl implements ChatService {
 
         eventPublisher.publishChatDeleted(chatId, requesterId);
         webSocketNotifier.notifyUsers(memberIds.stream().filter(id -> !id.equals(requesterId)).toList(), "CHAT_DELETED", chatId);
+        auditEventPublisher.publish(requesterId, "CHAT_DELETED", "CHAT", chatId.toString(),
+                Map.of("chatType", chat.getType().name(), "memberCount", String.valueOf(memberIds.size())));
     }
 
     @Override

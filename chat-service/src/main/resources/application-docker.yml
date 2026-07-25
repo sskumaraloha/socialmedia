@@ -76,3 +76,9 @@ app:
   security:
     jwt:
       secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}
+  outbox:
+    poll-interval-ms: 500
+
+services:
+  user-service:
+    base-url: ${USER_SERVICE_BASE_URL:http://user-service:8082}

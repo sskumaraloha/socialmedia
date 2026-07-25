@@ -30,6 +30,7 @@ import com.socialmedia.auth.service.LoginHistoryService;
 import com.socialmedia.auth.service.SessionCacheService;
 import com.socialmedia.auth.service.TwoFactorAuthService;
 import com.socialmedia.auth.service.TwoFactorChallengeCache;
+import com.socialmedia.common.lock.RedisDistributedLock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -64,6 +65,7 @@ public class AuthServiceImpl implements AuthService {
     private final TwoFactorChallengeCache twoFactorChallengeCache;
     private final EmailVerificationService emailVerificationService;
     private final UserMapper userMapper;
+    private final RedisDistributedLock distributedLock;
 
     public AuthServiceImpl(UserRepository userRepository, RefreshTokenRepository refreshTokenRepository,
             SessionRepository sessionRepository, PasswordEncoder passwordEncoder, JwtService jwtService,
@@ -71,7 +73,7 @@ public class AuthServiceImpl implements AuthService {
             LoginHistoryService loginHistoryService, AuditLogService auditLogService,
             AuthEventPublisher eventPublisher, TwoFactorAuthService twoFactorAuthService,
             TwoFactorChallengeCache twoFactorChallengeCache, EmailVerificationService emailVerificationService,
-            UserMapper userMapper) {
+            UserMapper userMapper, RedisDistributedLock distributedLock) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.sessionRepository = sessionRepository;
@@ -86,24 +88,32 @@ public class AuthServiceImpl implements AuthService {
         this.twoFactorChallengeCache = twoFactorChallengeCache;
         this.emailVerificationService = emailVerificationService;
         this.userMapper = userMapper;
+        this.distributedLock = distributedLock;
     }
 
     @Override
     @Transactional
     public AuthTokenResponse register(RegisterRequest request, String ipAddress, String userAgent) {
-        if (userRepository.existsByEmailIgnoreCase(request.email())) {
-            throw new EmailAlreadyRegisteredException(request.email());
-        }
+        // Distributed lock, not just an in-process one: two replicas of auth-service could
+        // otherwise both pass the existsByEmailIgnoreCase check for the same address before
+        // either commits, and the loser would hit the DB's unique constraint as a raw,
+        // unmapped DataIntegrityViolationException (a 500) instead of a clean 409.
+        String lockKey = "auth:register:" + request.email().toLowerCase();
+        return distributedLock.withLock(lockKey, Duration.ofSeconds(5), Duration.ofSeconds(3), () -> {
+            if (userRepository.existsByEmailIgnoreCase(request.email())) {
+                throw new EmailAlreadyRegisteredException(request.email());
+            }
 
-        User user = new User(request.email(), passwordEncoder.encode(request.password()), AuthProvider.LOCAL, null);
-        user = userRepository.save(user);
+            User user = new User(request.email(), passwordEncoder.encode(request.password()), AuthProvider.LOCAL, null);
+            user = userRepository.save(user);
 
-        eventPublisher.publishUserRegistered(user);
-        emailVerificationService.sendVerification(user);
-        auditLogService.record(user.getId(), "USER_REGISTERED", "USER", user.getId().toString(), null, ipAddress);
+            eventPublisher.publishUserRegistered(user);
+            emailVerificationService.sendVerification(user);
+            auditLogService.record(user.getId(), "USER_REGISTERED", "USER", user.getId().toString(), null, ipAddress);
 
-        return issueTokensForUser(user, request.deviceId(), request.deviceName(), request.deviceType(),
-                ipAddress, userAgent);
+            return issueTokensForUser(user, request.deviceId(), request.deviceName(), request.deviceType(),
+                    ipAddress, userAgent);
+        });
     }
 
     @Override

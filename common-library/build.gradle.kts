@@ -23,6 +23,7 @@ dependencies {
     compileOnly("org.springframework.boot:spring-boot-starter-security")
     compileOnly("org.springframework:spring-messaging")
     compileOnly("org.springframework.boot:spring-boot-starter-data-redis")
+    compileOnly("org.springframework.kafka:spring-kafka")
 
     annotationProcessor("org.springframework.boot:spring-boot-autoconfigure-processor")
 
@@ -32,4 +33,5 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-security")
     testImplementation("org.springframework:spring-messaging")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
+    testImplementation("org.springframework.kafka:spring-kafka")
 }

@@ -1,6 +1,8 @@
 package com.socialmedia.analytics.service.impl;
 
+import com.socialmedia.analytics.domain.AuditLogEntry;
 import com.socialmedia.analytics.domain.DailyMetrics;
+import com.socialmedia.analytics.dto.response.AuditLogResponse;
 import com.socialmedia.analytics.dto.response.DailyCount;
 import com.socialmedia.analytics.dto.response.DashboardResponse;
 import com.socialmedia.analytics.dto.response.DauResponse;
@@ -20,6 +22,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.ToLongFunction;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.support.PageableExecutionUtils;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -29,10 +37,13 @@ public class AnalyticsServiceImpl implements AnalyticsService {
 
     private final DailyMetricsRepository dailyMetricsRepository;
     private final UserActivityRepository userActivityRepository;
+    private final MongoTemplate mongoTemplate;
 
-    public AnalyticsServiceImpl(DailyMetricsRepository dailyMetricsRepository, UserActivityRepository userActivityRepository) {
+    public AnalyticsServiceImpl(DailyMetricsRepository dailyMetricsRepository, UserActivityRepository userActivityRepository,
+            MongoTemplate mongoTemplate) {
         this.dailyMetricsRepository = dailyMetricsRepository;
         this.userActivityRepository = userActivityRepository;
+        this.mongoTemplate = mongoTemplate;
     }
 
     @Override
@@ -112,6 +123,32 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         long storageBytes = today.map(DailyMetrics::getStorageBytesUploaded).orElse(0L);
         long revenueCents = today.map(DailyMetrics::getRevenueCents).orElse(0L);
         return new DashboardResponse(date, dau, mau, newSignups, messages, storageBytes, revenueCents);
+    }
+
+    @Override
+    public Page<AuditLogResponse> getAuditLogs(UUID actorUserId, String action, String targetType, Pageable pageable) {
+        Criteria criteria = new Criteria();
+        List<Criteria> filters = new java.util.ArrayList<>();
+        if (actorUserId != null) {
+            filters.add(Criteria.where("actorUserId").is(actorUserId));
+        }
+        if (action != null && !action.isBlank()) {
+            filters.add(Criteria.where("action").is(action));
+        }
+        if (targetType != null && !targetType.isBlank()) {
+            filters.add(Criteria.where("targetType").is(targetType));
+        }
+        if (!filters.isEmpty()) {
+            criteria.andOperator(filters.toArray(new Criteria[0]));
+        }
+
+        Query query = Query.query(criteria).with(pageable);
+        List<AuditLogResponse> content = mongoTemplate.find(query, AuditLogEntry.class).stream()
+                .map(e -> new AuditLogResponse(e.getActorUserId(), e.getAction(), e.getTargetType(), e.getTargetId(),
+                        e.getMetadata(), e.getOccurredAt()))
+                .toList();
+        return PageableExecutionUtils.getPage(content, pageable,
+                () -> mongoTemplate.count(Query.query(criteria), AuditLogEntry.class));
     }
 
     private long sum(List<DailyMetrics> metrics, ToLongFunction<DailyMetrics> extractor) {

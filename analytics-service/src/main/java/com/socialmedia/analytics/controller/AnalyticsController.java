@@ -1,5 +1,6 @@
 package com.socialmedia.analytics.controller;
 
+import com.socialmedia.analytics.dto.response.AuditLogResponse;
 import com.socialmedia.analytics.dto.response.DashboardResponse;
 import com.socialmedia.analytics.dto.response.DauResponse;
 import com.socialmedia.analytics.dto.response.GrowthStatsResponse;
@@ -10,6 +11,9 @@ import com.socialmedia.analytics.dto.response.RevenueStatsResponse;
 import com.socialmedia.analytics.dto.response.StorageStatsResponse;
 import com.socialmedia.analytics.service.AnalyticsService;
 import java.time.LocalDate;
+import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -78,5 +82,14 @@ public class AnalyticsController {
     @GetMapping("/dashboard")
     public DashboardResponse getDashboard(@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
         return analyticsService.getDashboard(date);
+    }
+
+    @GetMapping("/audit-logs")
+    public Page<AuditLogResponse> getAuditLogs(
+            @RequestParam(required = false) UUID actorUserId,
+            @RequestParam(required = false) String action,
+            @RequestParam(required = false) String targetType,
+            Pageable pageable) {
+        return analyticsService.getAuditLogs(actorUserId, action, targetType, pageable);
     }
 }

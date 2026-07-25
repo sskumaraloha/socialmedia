@@ -2,9 +2,13 @@ package com.socialmedia.analytics.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
+import com.socialmedia.analytics.domain.AuditLogEntry;
 import com.socialmedia.analytics.domain.DailyMetrics;
+import com.socialmedia.analytics.dto.response.AuditLogResponse;
 import com.socialmedia.analytics.dto.response.DashboardResponse;
 import com.socialmedia.analytics.dto.response.DauResponse;
 import com.socialmedia.analytics.dto.response.GrowthStatsResponse;
@@ -16,9 +20,11 @@ import com.socialmedia.analytics.dto.response.StorageStatsResponse;
 import com.socialmedia.analytics.repository.DailyMetricsRepository;
 import com.socialmedia.analytics.repository.UserActivityRepository;
 import java.lang.reflect.Field;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -27,18 +33,24 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
 
 @ExtendWith(MockitoExtension.class)
 class AnalyticsServiceImplTest {
 
     @Mock private DailyMetricsRepository dailyMetricsRepository;
     @Mock private UserActivityRepository userActivityRepository;
+    @Mock private MongoTemplate mongoTemplate;
 
     private AnalyticsServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new AnalyticsServiceImpl(dailyMetricsRepository, userActivityRepository);
+        service = new AnalyticsServiceImpl(dailyMetricsRepository, userActivityRepository, mongoTemplate);
     }
 
     private DailyMetrics metrics(LocalDate date, long newSignups, Set<UUID> activeUserIds, long messagesSent,
@@ -209,5 +221,38 @@ class AnalyticsServiceImplTest {
         assertThat(result.dau()).isZero();
         assertThat(result.mau()).isZero();
         assertThat(result.newSignupsToday()).isZero();
+    }
+
+    @Test
+    void getAuditLogs_mapsEntriesAndReturnsTotalCount() {
+        UUID actorId = UUID.randomUUID();
+        Instant occurredAt = Instant.parse("2026-07-25T10:00:00Z");
+        AuditLogEntry entry = new AuditLogEntry(actorId, "CHAT_DELETED", "CHAT", "chat-123",
+                Map.of("chatType", "GROUP"), occurredAt);
+        Pageable pageable = PageRequest.of(0, 20);
+        when(mongoTemplate.find(any(Query.class), eq(AuditLogEntry.class))).thenReturn(List.of(entry));
+        lenient().when(mongoTemplate.count(any(Query.class), eq(AuditLogEntry.class))).thenReturn(1L);
+
+        Page<AuditLogResponse> result = service.getAuditLogs(actorId, "CHAT_DELETED", "CHAT", pageable);
+
+        assertThat(result.getTotalElements()).isEqualTo(1);
+        assertThat(result.getContent()).hasSize(1);
+        AuditLogResponse response = result.getContent().get(0);
+        assertThat(response.actorUserId()).isEqualTo(actorId);
+        assertThat(response.action()).isEqualTo("CHAT_DELETED");
+        assertThat(response.targetId()).isEqualTo("chat-123");
+        assertThat(response.metadata()).containsEntry("chatType", "GROUP");
+    }
+
+    @Test
+    void getAuditLogs_returnsEmptyPageWhenNothingMatches() {
+        Pageable pageable = PageRequest.of(0, 20);
+        when(mongoTemplate.find(any(Query.class), eq(AuditLogEntry.class))).thenReturn(List.of());
+        lenient().when(mongoTemplate.count(any(Query.class), eq(AuditLogEntry.class))).thenReturn(0L);
+
+        Page<AuditLogResponse> result = service.getAuditLogs(null, null, null, pageable);
+
+        assertThat(result.getTotalElements()).isZero();
+        assertThat(result.getContent()).isEmpty();
     }
 }

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.socialmedia.common.audit.AuditEventPublisher;
 import com.socialmedia.user.domain.UserProfile;
 import com.socialmedia.user.dto.request.UpdateUsernameRequest;
 import com.socialmedia.user.dto.response.UserProfileResponse;
@@ -37,6 +38,7 @@ class UserProfileServiceImplTest {
     @Mock private BlockedUserRepository blockedUserRepository;
     @Mock private MutedUserRepository mutedUserRepository;
     @Mock private UserEventPublisher eventPublisher;
+    @Mock private AuditEventPublisher auditEventPublisher;
 
     private UserProfileServiceImpl service;
 
@@ -44,7 +46,7 @@ class UserProfileServiceImplTest {
     void setUp() {
         UserProfileMapper mapper = new UserProfileMapper();
         service = new UserProfileServiceImpl(userProfileRepository, followRepository, contactRepository,
-                blockedUserRepository, mutedUserRepository, mapper, eventPublisher);
+                blockedUserRepository, mutedUserRepository, mapper, eventPublisher, auditEventPublisher);
         lenient().when(userProfileRepository.save(any(UserProfile.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
