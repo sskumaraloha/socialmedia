@@ -53,6 +53,11 @@ logging:
     com.socialmedia: DEBUG
 
 app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}
   search:
     opensearch:
-      uris: http://opensearch:9200
+      host: ${OPENSEARCH_HOST:opensearch}
+      port: ${OPENSEARCH_PORT:9200}
+      scheme: ${OPENSEARCH_SCHEME:http}

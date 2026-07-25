@@ -5,5 +5,5 @@ import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
 
-public record ChatCreatedEvent(UUID chatId, ChatType type, UUID createdBy, Set<UUID> memberIds, Instant occurredAt) {
+public record ChatCreatedEvent(UUID chatId, ChatType type, String name, UUID createdBy, Set<UUID> memberIds, Instant occurredAt) {
 }

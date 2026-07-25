@@ -131,6 +131,7 @@ auto-configures, with zero per-service setup:
 | `presence-service` | **Fully implemented** — see below |
 | `media-service` | **Fully implemented** — see below |
 | `notification-service` | **Fully implemented** — see below |
+| `search-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -409,3 +410,48 @@ token). Actually landing a real email or push (MailHog, a real Firebase project,
 wasn't exercised, since none are running in this sandbox, but the failure-path proof above
 is direct evidence the dispatch, logging, and retry/DLQ code paths are correct - a
 successful send only differs in which branch of a try/catch executes.
+
+### `search-service`
+
+Indexes into OpenSearch purely by consuming events every other already-built service
+already publishes - no synchronous calls, no shared database access. Four indices:
+`users` (from user-service's `user.profile.created/updated.v1`), `chats` (GROUP/CHANNEL
+only - a private chat has no name to search by, and chat-service already refuses
+name/description edits on one, so a `chat.updated.v1` is guaranteed to only ever
+reference an already-indexed chat), `messages` (from message-service's `message.sent.v1`
+- indexing the same truncated, non-encrypted content preview that event already carries
+for chat-service's benefit, never a separate read of message-service's encrypted store),
+and `media` (from media-service's `media.uploaded.v1`, matched by filename for "file
+search"). `media.quarantined.v1` and `media.deleted.v1` remove a document from the index
+so infected or deleted content never stays searchable.
+
+Building this surfaced two small gaps in already-completed services' event contracts,
+fixed as part of this work: chat-service's `ChatCreatedEvent` didn't carry the chat's
+name (only later renames would ever reach search-service via `chat.updated.v1`, leaving
+every freshly created group unsearchable by its actual name), and media-service never
+published a `media.deleted.v1` event at all, nor did `media.uploaded.v1` carry the
+filename search needs. All three were added as straightforward, additive changes to
+those services' existing outgoing-event shape.
+
+Ranking is OpenSearch's own BM25 relevance scoring with field-boosting (e.g. a username
+match ranks above a bio match); autocomplete uses `match_bool_prefix` rather than a
+custom edge-ngram-analyzed field, trading a little precision for not needing custom index
+mappings; highlighting uses OpenSearch's own `highlight` API on the matched fields. A
+chat-metadata update uses OpenSearch's partial-document `update` API rather than a full
+re-index, so an update to just `name`/`description` can't accidentally wipe the `type`
+field a full re-index would otherwise clobber.
+
+Like OpenSearch's sibling infra (MongoDB, MinIO, ClamAV) this couldn't be run for real in
+this sandbox - no Docker daemon, and downloading the OpenSearch distribution directly was
+blocked by the environment's egress policy. Verification: 5 unit tests against a mocked
+`OpenSearchClient` (index/delete dispatch, IOException wrapped as a clean 503, and a hit
+constructed via the client's own real builder classes correctly mapped to a `SearchHit`
+with score and highlights) — and, unexpectedly, a much stronger real-world proof than
+that: booting search-service against this session's live Kafka broker replayed the actual
+`user.profile.created.v1` / `chat.created.v1` / `chat.deleted.v1` / `message.sent.v1`
+events that auth-service, chat-service, and message-service had produced earlier in this
+same session while their own sections above were being verified. Every one of them
+deserialized correctly against search-service's independently-written local mirrors -
+real proof the wire contracts match without a single hand-crafted test payload - then
+each attempted a genuine OpenSearch call, got a clean `Connection refused`, and was wrapped
+into `SearchUnavailableException` and logged without crashing the consumer or the JVM.

@@ -105,6 +105,7 @@ public class MediaServiceImpl implements MediaService {
             storageService.deleteObject(asset.getThumbnailKey());
         }
         mediaAssetRepository.delete(asset);
+        eventPublisher.publishDeleted(asset.getId(), asset.getOwnerId());
     }
 
     private MediaAsset requireAsset(UUID mediaId) {

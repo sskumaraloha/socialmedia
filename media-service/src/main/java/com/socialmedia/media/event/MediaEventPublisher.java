@@ -2,6 +2,7 @@ package com.socialmedia.media.event;
 
 import com.socialmedia.media.domain.MediaAsset;
 import java.time.Instant;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -20,7 +21,7 @@ public class MediaEventPublisher {
 
     public void publishUploaded(MediaAsset asset) {
         send(MediaTopics.MEDIA_UPLOADED, asset.getId().toString(),
-                new MediaUploadedEvent(asset.getId(), asset.getOwnerId(), asset.getKind(), Instant.now()));
+                new MediaUploadedEvent(asset.getId(), asset.getOwnerId(), asset.getOriginalFilename(), asset.getKind(), Instant.now()));
     }
 
     public void publishProcessed(MediaAsset asset) {
@@ -32,6 +33,10 @@ public class MediaEventPublisher {
     public void publishQuarantined(MediaAsset asset) {
         send(MediaTopics.MEDIA_QUARANTINED, asset.getId().toString(),
                 new MediaQuarantinedEvent(asset.getId(), asset.getOwnerId(), Instant.now()));
+    }
+
+    public void publishDeleted(UUID mediaId, UUID ownerId) {
+        send(MediaTopics.MEDIA_DELETED, mediaId.toString(), new MediaDeletedEvent(mediaId, ownerId, Instant.now()));
     }
 
     private void send(String topic, String key, Object payload) {

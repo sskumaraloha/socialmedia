@@ -23,4 +23,9 @@ public class KafkaTopicConfig {
     public NewTopic mediaQuarantinedTopic() {
         return TopicBuilder.name(MediaTopics.MEDIA_QUARANTINED).partitions(3).replicas(1).build();
     }
+
+    @Bean
+    public NewTopic mediaDeletedTopic() {
+        return TopicBuilder.name(MediaTopics.MEDIA_DELETED).partitions(3).replicas(1).build();
+    }
 }

@@ -28,7 +28,7 @@ public class ChatEventPublisher {
 
     public void publishChatCreated(Chat chat, Set<UUID> memberIds) {
         send(ChatTopics.CHAT_CREATED, chat.getId().toString(),
-                new ChatCreatedEvent(chat.getId(), chat.getType(), chat.getCreatedBy(), memberIds, Instant.now()));
+                new ChatCreatedEvent(chat.getId(), chat.getType(), chat.getName(), chat.getCreatedBy(), memberIds, Instant.now()));
     }
 
     public void publishChatUpdated(Chat chat) {
