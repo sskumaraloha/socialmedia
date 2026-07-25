@@ -126,6 +126,7 @@ auto-configures, with zero per-service setup:
 |---|---|
 | `auth-service` | **Fully implemented** — see below |
 | `user-service` | **Fully implemented** — see below |
+| `chat-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -188,3 +189,31 @@ like a connectivity issue. Only running a real broker exposed the real
 `key-serializer: StringSerializer` / `value-serializer: JsonSerializer` to every service's
 producer config, then re-verifying the full `auth-service → Kafka → user-service` profile-
 creation flow end-to-end.
+
+### `chat-service`
+
+Private chats, group chats and broadcast channels, with owner/admin/member roles and
+permission checks (only admins rename a group, add/remove members, or pin messages;
+private chats have no admin distinction — either participant can pin/delete). Per-member
+mute (indefinite or until a timestamp), archive, unread counts, a chat-list search by
+name, and pinned messages (referenced by an opaque message ID — chat-service never reads
+message content, that's message-service's job once built). REST APIs plus a STOMP-over-
+WebSocket endpoint (`/ws/chat`, SockJS-fallback) for real-time chat-metadata notifications
+(member added/removed, chat renamed, new message, pinned message) — the STOMP `CONNECT`
+frame carries the same bearer JWT as a native header (`Authorization: Bearer <token>`)
+since browsers can't set arbitrary headers on the WebSocket upgrade itself, and a
+`ChannelInterceptor` validates it before the session is admitted. This is a single-node
+in-memory broker; fanning delivery out across horizontally-scaled chat-service instances
+(a client connected to node A must see an event produced on node B) is the platform-wide
+WebSocket-scaling architecture — task on the backlog, likely landing alongside
+message-service.
+
+Consumes a `message.sent.v1` event to keep the chat list's last-message preview and
+per-member unread counts live — message-service doesn't exist yet, so this is a wire
+contract agreed up front (the same forward-dependency pattern user-service used for
+presence-service's not-yet-built presence-changed event). Verified against a real,
+natively-run Postgres/Kafka instance: booted the service, drove the full private-chat →
+group-chat → permission-denied → owner-override → mute/archive → pin/unpin → leave →
+delete lifecycle over HTTP with locally-signed JWTs, then hand-produced a `message.sent.v1`
+Kafka message and confirmed the unread counter incremented for every member except the
+sender and the chat-list preview updated live.
