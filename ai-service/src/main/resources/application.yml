@@ -55,3 +55,17 @@ logging:
   level:
     root: INFO
     com.socialmedia: DEBUG
+
+app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}
+  ai:
+    cache:
+      ttl-minutes: 60
+    openai:
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+      api-key: ${OPENAI_API_KEY:}
+      chat-model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+      transcription-model: ${OPENAI_TRANSCRIPTION_MODEL:whisper-1}
+      timeout-seconds: 30

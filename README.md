@@ -132,6 +132,7 @@ auto-configures, with zero per-service setup:
 | `media-service` | **Fully implemented** — see below |
 | `notification-service` | **Fully implemented** — see below |
 | `search-service` | **Fully implemented** — see below |
+| `ai-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -455,3 +456,44 @@ deserialized correctly against search-service's independently-written local mirr
 real proof the wire contracts match without a single hand-crafted test payload - then
 each attempted a genuine OpenSearch call, got a clean `Connection refused`, and was wrapped
 into `SearchUnavailableException` and logged without crashing the consumer or the JVM.
+
+### `ai-service`
+
+Every feature - summarize, meeting summary, smart replies, translate, spam detection,
+moderation, sentiment analysis - is a prompt built on top of one `OpenAiClient.chatComplete()`
+primitive, calling any OpenAI-compatible `/chat/completions` endpoint (OpenAI itself, Azure
+OpenAI, or a self-hosted server like vLLM/Ollama/LM Studio - configurable base URL, not
+hardcoded to one vendor). Structured outputs (spam/moderation/sentiment/meeting-summary/
+smart-replies) instruct the model to respond with strict JSON and parse that text with
+Jackson, rather than depending on a specific provider's function-calling feature, so the
+same code keeps working against any compatible backend. Voice-to-text is the one feature
+that needs a genuinely different call - `/audio/transcriptions`, a multipart upload
+matching Whisper's API shape - since transcription isn't a chat completion. Translation and
+summarization results are cached in Redis (keyed by a SHA-256 hash of the input) since
+identical strings recur often - repeated messages, UI copy - and an LLM round-trip is slow
+and not free; a cache hit skips the model call entirely.
+
+Also consumes `message.sent.v1` (the same event chat-service and search-service already
+react to) to run spam/moderation checks on every new message automatically and publish
+`ai.message.moderated.v1` - unlike notification-service's retry/DLQ machinery, a failure
+here (the AI provider being unreachable) is logged and dropped rather than retried, since
+making an optional moderation pass a hard dependency for message delivery would be the
+wrong tradeoff. Like every consumer of `message.sent.v1` in this platform, it only ever
+sees the truncated, non-encrypted content preview - never message-service's full
+decrypted content.
+
+No real OpenAI-compatible endpoint is reachable in this sandbox (no API key, and this
+environment's egress policy blocks arbitrary outbound hosts), so the actual model calls
+can't be exercised for real - but that made an unusually clean test of the *failure* path
+possible, the same way notification-service's retry/DLQ was proven by making SMTP
+unreachable on purpose. Verified for real: booted the service, pointed the OpenAI base URL
+at an unreachable host, confirmed `POST /ai/summarize` returns a clean `503
+AI_SERVICE_UNAVAILABLE` rather than a raw connection-refused stack trace, confirmed the
+usual 401-without-a-token check, and confirmed the moderation consumer picked up and
+correctly deserialized the very same real `message.sent.v1` events message-service had
+produced earlier in this session (already proven wire-compatible when search-service
+consumed them in its own section above), attempted a genuine call, and logged a clean
+failure without crashing. Unit tests (10) cover the caching behavior (cache hit skips the
+model, cache miss calls it and populates the cache), every structured-JSON response shape,
+and a malformed model response being wrapped as the same 503 rather than leaking a raw
+parse exception.
