@@ -130,6 +130,7 @@ auto-configures, with zero per-service setup:
 | `message-service` | **Fully implemented** — see below |
 | `presence-service` | **Fully implemented** — see below |
 | `media-service` | **Fully implemented** — see below |
+| `notification-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -364,3 +365,47 @@ Verification is unit tests (13, covering ownership checks, the complete/abort li
 and MediaProcessingService's branches: clean image → thumbnail, infected → quarantine +
 delete, scan-unavailable fail-open vs fail-closed, and video-compression failure still
 leaving the asset usable) plus the real boot-and-auth-and-S3-wiring check described above.
+
+### `notification-service`
+
+Email, SMS, and push all funnel through one `NotificationDispatchService`: render a
+localized template, hand off to the channel-specific sender, log the outcome. Localization
+is plain Java `ResourceBundle`s (`templates/notifications[_xx].properties`, English and
+Spanish included) rather than a templating engine - `ResourceBundle` already gives locale
+fallback for free (an unsupported locale silently falls back to the base bundle), and a
+simple `{{name}}` substitution reads better for callers passing a named parameter map than
+`MessageFormat`'s positional args. Push covers both Android and iOS from one integration:
+Firebase Cloud Messaging forwards to APNs under the hood for tokens registered from an iOS
+app, so there's no separate native APNs HTTP/2 client to maintain. SMS goes through Twilio;
+email through any SMTP server (`JavaMailSender`) - defaults to MailHog in docker-compose so
+sent mail can actually be viewed (`http://localhost:8025`) without real credentials.
+
+**Retry and DLQ** are wired at the Kafka consumer-container level
+(`KafkaConsumerConfig`'s `DefaultErrorHandler` + `ExponentialBackOff` +
+`DeadLetterPublishingRecoverer`) rather than inside each listener: every `@KafkaListener`
+in this service benefits automatically, and a failing send (SMTP unreachable, Firebase not
+configured, a malformed payload) is retried with backoff and, once attempts are exhausted,
+published to `{originalTopic}.DLT` instead of being silently dropped or retried forever.
+Consumes auth-service's two pre-existing forward-declared events
+(`auth.email-verification-requested.v1`, `auth.password.reset-requested.v1` - see
+auth-service's section above, which said sending was deferred to this service) plus a
+generic self-topic (`notification.send.v1`) any service - or this service's own
+`POST /notifications/send` REST endpoint - can publish to, so future notification triggers
+don't need a bespoke consumer per event type.
+
+Verified for real against native Postgres/Kafka - and this is the one place in the platform
+where the *failure* path was the point of the test, not a limitation of it: pointed the
+SMTP host at an unreachable port and published a real `auth.email-verification-requested.v1`
+event. Watched Spring Kafka's error handler retry it the configured number of times,
+confirmed three `FAILED` rows landed in `notification_logs` with the real
+`MailSendException` message, and confirmed the record was published to
+`auth.email-verification-requested.v1.DLT` by consuming it directly. Repeated the same
+proof through the REST-triggered path (register a device token, `POST /notifications/send`
+with `channel: PUSH`, confirm `202 Accepted`, then confirm `GET /notifications/logs` shows
+three `FAILED` entries citing "Firebase is not configured in this deployment") - the same
+retry/DLQ machinery, exercised through the generic self-topic instead of a bespoke
+consumer. Auth enforcement was verified the same way as every other service (401 without a
+token). Actually landing a real email or push (MailHog, a real Firebase project, Twilio)
+wasn't exercised, since none are running in this sandbox, but the failure-path proof above
+is direct evidence the dispatch, logging, and retry/DLQ code paths are correct - a
+successful send only differs in which branch of a try/catch executes.

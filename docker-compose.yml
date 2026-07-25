@@ -162,6 +162,14 @@ services:
       retries: 10
       start_period: 120s
 
+  mailhog:
+    image: mailhog/mailhog:latest
+    networks: [socialmedia-net]
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # web UI for viewing sent mail
+
   zipkin:
     image: openzipkin/zipkin:latest
     networks: [socialmedia-net]
@@ -271,6 +279,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      mailhog: { condition: service_started }
 
   presence-service:
     <<: *service-defaults
