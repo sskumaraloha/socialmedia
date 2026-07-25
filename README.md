@@ -128,6 +128,7 @@ auto-configures, with zero per-service setup:
 | `user-service` | **Fully implemented** — see below |
 | `chat-service` | **Fully implemented** — see below |
 | `message-service` | **Fully implemented** — see below |
+| `presence-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -268,3 +269,46 @@ encryption round-tripping through the mock boundary, the membership-check failur
 scheduled/self-destruct timing, reaction upsert, and delete-for-me vs delete-for-everyone)
 plus a Testcontainers integration test that compiles but - like every `*IT` test in this
 repo - needs a Docker daemon this sandbox doesn't have.
+
+### `presence-service` and the scalable-WebSocket architecture
+
+**presence-service**: tracks online/offline and last-seen entirely in Redis - a sorted set
+(`presence:heartbeats`, member = userId, score = last-heartbeat epoch-millis) rather than
+per-user TTL keys with Redis keyspace notifications, so it works against any Redis
+deployment including managed ones that disallow `CONFIG SET` for keyspace events. Clients
+call `POST /api/v1/presence/heartbeat` periodically; a small `@Scheduled` sweep
+(`PresenceSweepScheduler`) marks anyone whose last heartbeat fell outside the timeout as
+offline and publishes `presence.changed.v1` - the exact contract user-service's
+`PresenceChangedConsumer` was already built against (see the user-service section above),
+so that consumer, which had been idling harmlessly against a topic with no producer, now
+actually receives events. Verified end-to-end against native Redis/Kafka: heartbeat marks
+a user online, waiting past the (test-shortened) timeout has the sweep mark them offline
+automatically with `lastSeenAt` populated, and both the online and offline events were
+confirmed on the wire and consumed cleanly by a running user-service instance with no
+deserialization errors.
+
+**Scalable WebSocket architecture**: chat-service and message-service each run their own
+single-node, in-memory STOMP broker (`enableSimpleBroker`), which has a hard limit -
+`SimpMessagingTemplate.convertAndSendToUser()` only reaches a session connected to the
+exact node that called it. A message produced by a REST call handled on node A would
+never reach a client whose WebSocket happens to be connected to node B. Fixed with a
+`RedisWebSocketRelay` / `RedisWebSocketRelayListener` pair added to `common-library`:
+every notification is published as JSON to a per-service Redis Pub/Sub channel
+(`ws:relay:chat-service`, `ws:relay:message-service`) instead of being delivered directly;
+every node subscribes to that same channel and attempts local delivery on receipt - a
+no-op on any node where the target user isn't connected, and successful delivery on
+whichever one node they actually are connected to. `ChatWebSocketNotifier` and
+`MessageWebSocketNotifier` were updated to publish through this relay instead of calling
+`SimpMessagingTemplate` directly, with no change to their public API or to any calling
+code. Verified against native Redis: relaunched chat-service, confirmed via
+`PUBSUB CHANNELS` that it subscribed to its relay channel, then hand-published a raw
+relay envelope over Redis and confirmed it was received and processed without error.
+
+What's *not* implemented in code, because it's an infrastructure/deployment concern
+rather than application logic (see `docs/ARCHITECTURE.md` for where these fit): sticky
+sessions and the load balancer are an ingress/reverse-proxy configuration (e.g. an nginx
+or Kubernetes Ingress `session-affinity` annotation) that keeps a client's WebSocket
+reconnects landing on nodes that already have warm local state, not something a Spring
+service configures itself; client-side reconnect/backoff is a frontend concern. The Redis
+relay above is what makes those deployment choices *safe* - even without sticky sessions,
+correctness no longer depends on which node a client lands on, only latency does.

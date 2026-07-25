@@ -55,3 +55,11 @@ logging:
   level:
     root: INFO
     com.socialmedia: DEBUG
+
+app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}
+  presence:
+    timeout-seconds: ${PRESENCE_TIMEOUT_SECONDS:60}
+    sweep-interval-ms: ${PRESENCE_SWEEP_INTERVAL_MS:15000}

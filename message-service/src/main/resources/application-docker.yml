@@ -5,6 +5,10 @@ spring:
     mongodb:
       uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:example}@mongodb:27017/message_db?authSource=admin
       uuid-representation: standard
+    redis:
+      host: redis
+      port: 6379
+      password: ${REDIS_PASSWORD:}
   kafka:
     bootstrap-servers: kafka:9092
     consumer:
