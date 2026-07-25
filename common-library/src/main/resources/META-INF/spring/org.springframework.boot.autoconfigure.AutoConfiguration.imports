@@ -1,1 +1,2 @@
 com.socialmedia.common.CommonLibraryAutoConfiguration
+com.socialmedia.common.jpa.JpaAuditingAutoConfiguration

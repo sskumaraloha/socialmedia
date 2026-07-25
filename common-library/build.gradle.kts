@@ -16,9 +16,11 @@ dependencies {
     compileOnly("org.springframework.boot:spring-boot-starter-actuator")
     compileOnly("io.micrometer:micrometer-core")
     compileOnly("org.springdoc:springdoc-openapi-starter-common:2.6.0")
+    compileOnly("org.springframework.boot:spring-boot-starter-data-jpa")
 
     annotationProcessor("org.springframework.boot:spring-boot-autoconfigure-processor")
 
     testImplementation("org.springframework:spring-web")
     testImplementation("jakarta.servlet:jakarta.servlet-api")
+    testImplementation("org.springframework.boot:spring-boot-starter-data-jpa")
 }

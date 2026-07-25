@@ -106,7 +106,7 @@ class AuthServiceImplTest {
             return;
         }
         try {
-            Field idField = Class.forName("com.socialmedia.auth.domain.BaseEntity").getDeclaredField("id");
+            Field idField = Class.forName("com.socialmedia.common.jpa.BaseEntity").getDeclaredField("id");
             idField.setAccessible(true);
             idField.set(user, UUID.randomUUID());
         } catch (ReflectiveOperationException e) {

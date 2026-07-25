@@ -1,5 +1,7 @@
 package com.socialmedia.auth.domain;
 
+import com.socialmedia.common.jpa.BaseEntity;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Index;

@@ -1,4 +1,4 @@
-package com.socialmedia.auth.domain;
+package com.socialmedia.common.jpa;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.EntityListeners;
@@ -12,6 +12,11 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
+/**
+ * Shared identity + audit-timestamp base for every JPA entity across services. Relies on
+ * {@link JpaAuditingAutoConfiguration} (auto-registered via this library) to actually
+ * populate createdAt/updatedAt - without it, these fields silently stay null on insert.
+ */
 @MappedSuperclass
 @EntityListeners(AuditingEntityListener.class)
 public abstract class BaseEntity {

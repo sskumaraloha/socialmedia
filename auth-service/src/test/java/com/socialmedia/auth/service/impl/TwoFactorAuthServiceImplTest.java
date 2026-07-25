@@ -82,7 +82,7 @@ class TwoFactorAuthServiceImplTest {
     }
 
     private static void setId(User user, UUID id) throws Exception {
-        Field idField = Class.forName("com.socialmedia.auth.domain.BaseEntity").getDeclaredField("id");
+        Field idField = Class.forName("com.socialmedia.common.jpa.BaseEntity").getDeclaredField("id");
         idField.setAccessible(true);
         idField.set(user, id);
     }
