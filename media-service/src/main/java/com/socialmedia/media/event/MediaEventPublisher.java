@@ -21,7 +21,8 @@ public class MediaEventPublisher {
 
     public void publishUploaded(MediaAsset asset) {
         send(MediaTopics.MEDIA_UPLOADED, asset.getId().toString(),
-                new MediaUploadedEvent(asset.getId(), asset.getOwnerId(), asset.getOriginalFilename(), asset.getKind(), Instant.now()));
+                new MediaUploadedEvent(asset.getId(), asset.getOwnerId(), asset.getOriginalFilename(), asset.getKind(),
+                        asset.getSizeBytes(), Instant.now()));
     }
 
     public void publishProcessed(MediaAsset asset) {

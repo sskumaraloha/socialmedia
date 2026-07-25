@@ -133,6 +133,7 @@ auto-configures, with zero per-service setup:
 | `notification-service` | **Fully implemented** — see below |
 | `search-service` | **Fully implemented** — see below |
 | `ai-service` | **Fully implemented** — see below |
+| `analytics-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -497,3 +498,63 @@ failure without crashing. Unit tests (10) cover the caching behavior (cache hit 
 model, cache miss calls it and populates the cache), every structured-JSON response shape,
 and a malformed model response being wrapped as the same 503 rather than leaking a raw
 parse exception.
+
+### `analytics-service`
+
+DAU/MAU, message/growth/storage/revenue trends, and week-over-week cohort retention -
+all admin-only (`@PreAuthorize("hasRole('ADMIN')")` at the controller level, the
+platform's first use of role-based endpoint authorization), built entirely from events
+every other already-built service already publishes: `auth.user.registered.v1` and
+`auth.user.logged-in.v1` (signups/logins), `message.sent.v1` (message volume),
+`media.uploaded.v1` (storage growth), and a forward-declared `payment.completed.v1`
+(revenue) - no payment-service exists in this platform, so that consumer never sees
+real traffic today, but the revenue dashboard is ready the moment one is built, the
+same forward-declaration pattern presence-service's `presence.changed.v1` consumer used
+before presence-service existed.
+
+The task description called this "Kafka Stream Processing," but this implementation
+deliberately does *not* reach for the full Kafka Streams DSL and its state stores.
+Instead each event is handled by a plain `@KafkaListener` that performs one atomic
+MongoDB upsert via `MongoTemplate` (`$inc` for counters, `$addToSet` for the
+per-day unique-active-user set, `$max`/`setOnInsert` for per-user signup/last-active
+tracking) directly against a `daily_metrics`/`user_activity` collection - a continuous,
+incremental aggregation with the same real-time effect, at a fraction of the
+operational complexity, and easy to reason about under concurrent consumer threads
+since every write is a single atomic Mongo operation rather than a read-modify-write
+of a loaded object (which would lose updates racing on the same day's document). This
+is a deliberate scope decision, not an oversight. MAU is computed on read as the union
+of each day's `activeUserIds` set across the trailing 30-day window, not a separately
+maintained rolling counter, since Mongo sets make that union cheap and it avoids a
+second write path that could drift from the daily numbers.
+
+Like message-service, analytics-service depends only on MongoDB and Kafka - no
+Postgres, so nothing here needed the auth-service-style JWT-issuance path, only the
+usual resource-server JWT validation plus `@EnableMethodSecurity` for `@PreAuthorize`
+to take effect. MongoDB itself isn't reachable in this sandbox (no Docker daemon, and
+the environment's egress policy blocks downloading it directly), so the full
+DAU/MAU/retention read path can't be exercised against a real database - but exactly
+like message-service and search-service before it, the write path was verified for
+real: booted the service against this session's live Kafka broker, confirmed all four
+consumers joined their consumer groups, then replayed genuine
+`auth.user.registered.v1` / `auth.user.logged-in.v1` / `message.sent.v1` /
+`media.uploaded.v1` payloads. Every one deserialized correctly against
+analytics-service's independently-written local event mirrors - further proof, on top
+of what search-service and ai-service already demonstrated, that the wire contracts
+match without any hand-crafted test payloads - then each attempted a genuine Mongo
+upsert, got a clean `Connection refused`, and was caught and logged without crashing
+the consumer thread or the JVM. Also confirmed the usual `401` without a token and, new
+for this service, a `403` for a validly-authenticated non-admin token against
+`/api/v1/analytics/dashboard` - proving the RBAC gate actually authorizes rather than
+merely authenticates. 12 unit tests cover every `AnalyticsServiceImpl` method
+(DAU/MAU/message/growth/storage/revenue/retention/dashboard), including the MAU
+set-union-across-days behavior and the zero-cohort retention edge case, plus a
+compile-checked (not run, same Docker limitation) Testcontainers `AnalyticsControllerIT`
+covering the 401/403/200-zeroed-stats RBAC ladder against a real MongoDB container.
+
+Building this surfaced one small gap in an already-completed service's event contract:
+media-service's `MediaUploadedEvent` didn't carry the uploaded file's size, which the
+storage-growth dashboard needs. Fixed as a straightforward, additive field addition to
+media-service's existing outgoing event, mirrored by search-service's separate,
+already-shipped `originalFilename` addition to the same event for its own file-search
+feature - both changes verified not to regress chat-service's or media-service's own
+compile/test suites.

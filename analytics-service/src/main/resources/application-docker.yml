@@ -4,6 +4,7 @@ spring:
   data:
     mongodb:
       uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:example}@mongodb:27017/analytics_db?authSource=admin
+      uuid-representation: standard
   kafka:
     bootstrap-servers: kafka:9092
     consumer:
@@ -53,3 +54,8 @@ logging:
   level:
     root: INFO
     com.socialmedia: DEBUG
+
+app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}
