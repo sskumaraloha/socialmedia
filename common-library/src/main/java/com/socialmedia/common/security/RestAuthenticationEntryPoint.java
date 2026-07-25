@@ -1,24 +1,23 @@
-package com.socialmedia.auth.security;
+package com.socialmedia.common.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialmedia.common.exception.ApiError;
+import com.socialmedia.common.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Instant;
 import org.slf4j.MDC;
-import com.socialmedia.common.web.CorrelationIdFilter;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;
-import org.springframework.stereotype.Component;
 
 /**
- * Security filter-chain exceptions happen before any controller runs, so common-library's
- * @RestControllerAdvice never sees them - this renders the same ApiError shape directly.
+ * Security filter-chain exceptions happen before any controller runs, so
+ * GlobalExceptionHandler's @RestControllerAdvice never sees them - this renders the
+ * same ApiError shape directly. Wire it into your service's SecurityConfig.
  */
-@Component
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
     private final ObjectMapper objectMapper;

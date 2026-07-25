@@ -125,6 +125,7 @@ auto-configures, with zero per-service setup:
 | Service | Status |
 |---|---|
 | `auth-service` | **Fully implemented** — see below |
+| `user-service` | **Fully implemented** — see below |
 | everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
 
 ### `auth-service`
@@ -150,3 +151,40 @@ the request thread for up to 60s when the broker is unreachable, missing
 polymorphic-typing mismatch in the Redis cache layer, and a 2FA challenge token that never
 actually reached the client because it was being routed through a generic exception
 handler that didn't know about it.
+
+### `user-service`
+
+Profile management (display name, bio, avatar, custom status), per-field privacy controls
+(who can see online status / last-seen, who can message you, who can add you to groups —
+`EVERYONE` / `CONTACTS` / `NOBODY`), username search and typeahead, follow/unfollow with
+follower/following counts, contacts, block (which severs any existing follow relationship
+in both directions) and mute. Consumes `auth-service`'s `user.registered` Kafka event to
+provision a profile (auto-generated, de-duplicated username) the moment an account is
+created, and consumes presence-service's presence-changed event to track last-known-online.
+Same clean-architecture layering as `auth-service`, Flyway-managed schema, unit tests
+(`./gradlew :user-service:test`) and a Testcontainers integration test
+(`./gradlew :user-service:integrationTest`) that signs its own JWT with the shared secret
+to simulate a token issued by `auth-service`, so the two services can be tested
+independently of each other.
+
+Building this alongside `auth-service` motivated several platform-wide additions to
+`common-library` so every remaining service can reuse them instead of re-implementing:
+a `TimestampedEntity` (createdAt/updatedAt only) split out from `BaseEntity` for entities
+whose ID must be assigned rather than generated (a user profile's ID is the auth-service
+user ID, not a fresh UUID), a `JpaAuditingAutoConfiguration` so `@EnableJpaAuditing` doesn't
+need repeating in every service, and a shared JWT resource-server stack (`JwtValidator`,
+`JwtAuthenticationFilter`, `AuthenticatedPrincipal`, `CurrentUser`, the REST entry
+point/access-denied handler) so any downstream service can validate an `auth-service`-issued
+token with a two-line `SecurityConfig` and no OAuth2/login machinery of its own.
+
+Real end-to-end testing (native Postgres/Redis, and a natively-run Apache Kafka 3.8.0
+broker in KRaft mode — no Docker daemon available in this environment) surfaced one
+platform-wide bug that mocked unit tests could never have caught: `spring.kafka.producer
+.value-serializer` was never actually configured anywhere, so Spring Kafka silently fell
+back to `StringSerializer`. Every earlier test had run against an unreachable broker, where
+the `max.block.ms` timeout fired before serialization was ever attempted — making it look
+like a connectivity issue. Only running a real broker exposed the real
+`ClassCastException`-style serializer error. Fixed by adding explicit
+`key-serializer: StringSerializer` / `value-serializer: JsonSerializer` to every service's
+producer config, then re-verifying the full `auth-service → Kafka → user-service` profile-
+creation flow end-to-end.

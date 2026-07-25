@@ -14,15 +14,20 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
   kafka:
     bootstrap-servers: kafka:9092
     consumer:
       group-id: user-service
       auto-offset-reset: earliest
-      properties:
-        spring.json.trusted.packages: "com.socialmedia.*"
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       properties:
         enable.idempotence: true
         max.block.ms: 3000
@@ -61,3 +66,8 @@ logging:
   level:
     root: INFO
     com.socialmedia: DEBUG
+
+app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}

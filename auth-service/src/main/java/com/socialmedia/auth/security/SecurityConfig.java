@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialmedia.auth.security.oauth2.CustomOAuth2UserService;
 import com.socialmedia.auth.security.oauth2.OAuth2AuthenticationSuccessHandler;
 import com.socialmedia.auth.service.RateLimiterService;
+import com.socialmedia.common.security.RestAccessDeniedHandler;
+import com.socialmedia.common.security.RestAuthenticationEntryPoint;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -92,6 +94,16 @@ public class SecurityConfig {
     public JwtAuthenticationFilter jwtAuthenticationFilter(JwtService jwtService,
             com.socialmedia.auth.service.SessionCacheService sessionCacheService) {
         return new JwtAuthenticationFilter(jwtService, sessionCacheService);
+    }
+
+    @Bean
+    public RestAuthenticationEntryPoint restAuthenticationEntryPoint(ObjectMapper objectMapper) {
+        return new RestAuthenticationEntryPoint(objectMapper);
+    }
+
+    @Bean
+    public RestAccessDeniedHandler restAccessDeniedHandler(ObjectMapper objectMapper) {
+        return new RestAccessDeniedHandler(objectMapper);
     }
 
     @Bean

@@ -1,4 +1,4 @@
-package com.socialmedia.auth.security;
+package com.socialmedia.common.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialmedia.common.exception.ApiError;
@@ -12,9 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.web.access.AccessDeniedHandler;
-import org.springframework.stereotype.Component;
 
-@Component
 public class RestAccessDeniedHandler implements AccessDeniedHandler {
 
     private final ObjectMapper objectMapper;

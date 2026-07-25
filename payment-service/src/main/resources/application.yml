@@ -19,10 +19,12 @@ spring:
     consumer:
       group-id: payment-service
       auto-offset-reset: earliest
-      properties:
-        spring.json.trusted.packages: "com.socialmedia.*"
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       properties:
         enable.idempotence: true
         max.block.ms: 3000
