@@ -63,7 +63,12 @@ app:
   security:
     jwt:
       secret: ${JWT_SECRET:change-me-in-env-this-is-not-a-real-secret}
-    message-encryption-key: ${MESSAGE_ENCRYPTION_KEY:/ZAKVd1mipwEpcZlvCpErLEwVDGGJdO52hSZtgebeiU=}
+    # There is deliberately no message-encryption-key any more: messages are end-to-end
+    # encrypted by clients, so this service holds no key capable of decrypting them. These
+    # bounds only cap how much opaque ciphertext it will accept and store.
+    e2e:
+      max-ciphertext-bytes: 65536
+      max-envelopes-per-message: 64
 
 services:
   chat-service:

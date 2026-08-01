@@ -12,15 +12,20 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialmedia.ai.client.OpenAiClient;
+import com.socialmedia.ai.dto.request.ReportMessageRequest;
 import com.socialmedia.ai.dto.response.MeetingSummaryResponse;
 import com.socialmedia.ai.dto.response.ModerationResponse;
 import com.socialmedia.ai.dto.response.SentimentResponse;
 import com.socialmedia.ai.dto.response.SmartReplyResponse;
 import com.socialmedia.ai.dto.response.SpamCheckResponse;
+import com.socialmedia.ai.event.AiEventPublisher;
+import com.socialmedia.ai.event.outgoing.MessageModeratedEvent;
 import com.socialmedia.ai.exception.AiServiceUnavailableException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import java.util.UUID;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,13 +37,14 @@ class AiServiceImplTest {
     @Mock private OpenAiClient openAiClient;
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private ValueOperations<String, String> valueOperations;
+    @Mock private AiEventPublisher eventPublisher;
 
     private AiServiceImpl service;
 
     @BeforeEach
     void setUp() {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        service = new AiServiceImpl(openAiClient, new ObjectMapper(), redisTemplate, 60);
+        service = new AiServiceImpl(openAiClient, new ObjectMapper(), redisTemplate, eventPublisher, 60);
     }
 
     @Test
@@ -144,5 +150,30 @@ class AiServiceImplTest {
         String text = service.transcribe(audio, "clip.wav", "audio/wav");
 
         assertThat(text).isEqualTo("hello there");
+    }
+
+    @Test
+    void reportMessageModeratesTheClientSuppliedPlaintextAndPublishesTheVerdict() {
+        when(openAiClient.chatComplete(anyString(), eq("abusive text")))
+                .thenReturn("{\"flagged\": true, \"categories\": [\"harassment\"], \"reason\": \"targeted abuse\"}")
+                .thenReturn("{\"spam\": false, \"confidence\": 0.1, \"reason\": \"not spam\"}");
+
+        UUID messageId = UUID.randomUUID();
+        UUID chatId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        ModerationResponse response = service.reportMessage(
+                new ReportMessageRequest(messageId, chatId, senderId, "abusive text"));
+
+        assertThat(response.flagged()).isTrue();
+        assertThat(response.categories()).contains("harassment");
+
+        ArgumentCaptor<MessageModeratedEvent> captor = ArgumentCaptor.forClass(MessageModeratedEvent.class);
+        verify(eventPublisher).publishMessageModerated(captor.capture());
+        MessageModeratedEvent published = captor.getValue();
+        assertThat(published.messageId()).isEqualTo(messageId);
+        assertThat(published.senderId()).isEqualTo(senderId);
+        assertThat(published.flagged()).isTrue();
+        assertThat(published.reason()).isEqualTo("targeted abuse");
     }
 }

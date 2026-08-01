@@ -2,7 +2,6 @@ package com.socialmedia.search.service;
 
 import com.socialmedia.search.domain.ChatDocument;
 import com.socialmedia.search.domain.MediaDocument;
-import com.socialmedia.search.domain.MessageDocument;
 import com.socialmedia.search.domain.UserDocument;
 import com.socialmedia.search.dto.response.SearchHit;
 import java.util.List;
@@ -20,10 +19,6 @@ public interface SearchService {
 
     void deleteChat(UUID chatId);
 
-    void indexMessage(MessageDocument document);
-
-    void deleteMessage(UUID messageId);
-
     void indexMedia(MediaDocument document);
 
     void deleteMedia(UUID mediaId);
@@ -33,8 +28,6 @@ public interface SearchService {
     List<SearchHit<UserDocument>> autocompleteUsers(String query, int limit);
 
     List<SearchHit<ChatDocument>> searchChannels(String query, int limit);
-
-    List<SearchHit<MessageDocument>> searchMessages(String query, UUID chatId, int limit);
 
     List<SearchHit<MediaDocument>> searchMedia(String query, int limit);
 }

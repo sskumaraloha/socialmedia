@@ -1,6 +1,7 @@
 package com.socialmedia.ai.controller;
 
 import com.socialmedia.ai.dto.request.MeetingSummaryRequest;
+import com.socialmedia.ai.dto.request.ReportMessageRequest;
 import com.socialmedia.ai.dto.request.SmartReplyRequest;
 import com.socialmedia.ai.dto.request.SummarizeRequest;
 import com.socialmedia.ai.dto.request.TextRequest;
@@ -62,6 +63,13 @@ public class AiController {
     @PostMapping("/moderate")
     public ModerationResponse moderate(@Valid @RequestBody TextRequest request) {
         return aiService.moderate(request.text());
+    }
+
+    /** Replaces the old automatic message.sent.v1 moderation consumer, which end-to-end
+     * encryption made impossible - see AiTopics. */
+    @PostMapping("/report-message")
+    public ModerationResponse reportMessage(@Valid @RequestBody ReportMessageRequest request) {
+        return aiService.reportMessage(request);
     }
 
     @PostMapping("/sentiment")

@@ -3,7 +3,6 @@ package com.socialmedia.search.service.impl;
 import com.socialmedia.search.config.SearchIndexNames;
 import com.socialmedia.search.domain.ChatDocument;
 import com.socialmedia.search.domain.MediaDocument;
-import com.socialmedia.search.domain.MessageDocument;
 import com.socialmedia.search.domain.UserDocument;
 import com.socialmedia.search.dto.response.SearchHit;
 import com.socialmedia.search.exception.SearchUnavailableException;
@@ -73,16 +72,6 @@ public class SearchServiceImpl implements SearchService {
     }
 
     @Override
-    public void indexMessage(MessageDocument document) {
-        index(SearchIndexNames.MESSAGES, document.messageId().toString(), document);
-    }
-
-    @Override
-    public void deleteMessage(UUID messageId) {
-        delete(SearchIndexNames.MESSAGES, messageId.toString());
-    }
-
-    @Override
     public void indexMedia(MediaDocument document) {
         index(SearchIndexNames.MEDIA, document.mediaId().toString(), document);
     }
@@ -113,17 +102,6 @@ public class SearchServiceImpl implements SearchService {
                 .query(query)
                 .fields(List.of("name^3", "description"))));
         return search(SearchIndexNames.CHATS, esQuery, limit, ChatDocument.class, highlightOf("name", "description"));
-    }
-
-    @Override
-    public List<SearchHit<MessageDocument>> searchMessages(String query, UUID chatId, int limit) {
-        Query textQuery = Query.of(q -> q.match(m -> m.field("contentPreview").query(v -> v.stringValue(query))));
-        Query esQuery = chatId == null
-                ? textQuery
-                : Query.of(q -> q.bool(b -> b
-                        .must(textQuery)
-                        .filter(Query.of(f -> f.term(t -> t.field("chatId").value(v -> v.stringValue(chatId.toString())))))));
-        return search(SearchIndexNames.MESSAGES, esQuery, limit, MessageDocument.class, highlightOf("contentPreview"));
     }
 
     @Override

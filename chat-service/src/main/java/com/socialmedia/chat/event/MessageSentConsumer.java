@@ -25,7 +25,7 @@ public class MessageSentConsumer {
     public void onMessageSent(String payload) {
         try {
             MessageSentEvent event = objectMapper.readValue(payload, MessageSentEvent.class);
-            chatService.recordIncomingMessage(event.chatId(), event.senderId(), event.contentPreview(), event.sentAt());
+            chatService.recordIncomingMessage(event.chatId(), event.senderId(), event.sentAt());
         } catch (Exception e) {
             log.error("Failed to process message.sent.v1 payload: {}", e.getMessage(), e);
         }

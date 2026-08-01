@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component;
 public class MessageEventPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(MessageEventPublisher.class);
-    private static final int PREVIEW_MAX_LENGTH = 120;
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
 
@@ -22,11 +21,10 @@ public class MessageEventPublisher {
         this.kafkaTemplate = kafkaTemplate;
     }
 
-    public void publishMessageSent(Message message, String decryptedContent) {
-        String preview = decryptedContent == null ? null
-                : decryptedContent.substring(0, Math.min(decryptedContent.length(), PREVIEW_MAX_LENGTH));
+    /** Metadata only - see MessageSentEvent for why no content preview can be published. */
+    public void publishMessageSent(Message message) {
         send(MessageTopics.MESSAGE_SENT, message.getChatId().toString(),
-                new MessageSentEvent(message.getId(), message.getChatId(), message.getSenderId(), preview, message.getCreatedAt()));
+                new MessageSentEvent(message.getId(), message.getChatId(), message.getSenderId(), message.getCreatedAt()));
     }
 
     public void publishMessageDeleted(UUID messageId, UUID chatId, UUID deletedBy) {

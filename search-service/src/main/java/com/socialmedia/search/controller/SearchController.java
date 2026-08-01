@@ -2,7 +2,6 @@ package com.socialmedia.search.controller;
 
 import com.socialmedia.search.domain.ChatDocument;
 import com.socialmedia.search.domain.MediaDocument;
-import com.socialmedia.search.domain.MessageDocument;
 import com.socialmedia.search.domain.UserDocument;
 import com.socialmedia.search.dto.response.SearchHit;
 import com.socialmedia.search.service.SearchService;
@@ -41,11 +40,8 @@ public class SearchController {
         return searchService.searchChannels(q, clamp(limit));
     }
 
-    @GetMapping("/messages")
-    public List<SearchHit<MessageDocument>> searchMessages(@RequestParam String q,
-            @RequestParam(required = false) UUID chatId, @RequestParam(defaultValue = "20") int limit) {
-        return searchService.searchMessages(q, chatId, clamp(limit));
-    }
+    // GET /messages is gone: end-to-end encrypted message content is not searchable server-side.
+    // See SearchIndexNames for the full reasoning.
 
     @GetMapping("/media")
     public List<SearchHit<MediaDocument>> searchMedia(@RequestParam String q, @RequestParam(defaultValue = "20") int limit) {

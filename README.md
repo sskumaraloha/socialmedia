@@ -135,7 +135,8 @@ auto-configures, with zero per-service setup:
 | `ai-service` | **Fully implemented** — see below |
 | `analytics-service` | **Fully implemented** — see below |
 | `gateway-service` | **Routing, rate limiting, circuit breaking implemented** — see "Cross-cutting production-grade patterns" below |
-| everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service |
+| End-to-end encryption (1:1) | **Implemented** — real Signal Protocol / PQXDH, see "End-to-end encryption" below |
+| everything else | Scaffold only (build config, health/metrics wiring) — domain logic is the next phase, built service by service. See "Roadmap" at the end for what is queued and explicitly not yet built. |
 
 ### `auth-service`
 
@@ -241,11 +242,10 @@ are embedded directly in the message document rather than modeled as separate
 collections/tables - a natural fit for MongoDB that a relational schema wouldn't allow as
 cleanly.
 
-Message content is encrypted at rest with AES-256-GCM (`MessageEncryptionService`) - this
-is application-level encryption, not end-to-end: the server holds the key and can decrypt,
-since there's no client-side key-exchange infrastructure in this backend-only project. It
-protects content if the MongoDB data files or backups are exfiltrated without the
-application's secret store.
+Message content is **end-to-end encrypted** - the server cannot read it at all. This
+replaced an earlier server-side AES-256-GCM scheme; see the "End-to-end encryption"
+section below for the design and for the (significant, deliberate) consequences that has
+for search, AI moderation, and chat-list previews.
 
 Every send/list/get/forward is gated by a **synchronous** authoritative check against
 chat-service (`ChatMembershipClient`, using Spring's `RestClient`, forwarding the caller's
@@ -688,3 +688,108 @@ None of this needed infrastructure this sandbox lacks - Redis, Postgres, and Kaf
 already running natively from earlier verification in this session, so every one of these
 patterns was exercised against a genuinely booted service (not just unit-tested in isolation)
 at least once, as described above.
+
+### End-to-end encryption
+
+Message content is end-to-end encrypted with the **real Signal Protocol**, via the official
+`org.signal:libsignal-client` library - no hand-rolled cryptography anywhere. The protocol is
+**PQXDH**: a post-quantum *hybrid* key agreement (X25519 + ML-KEM/Kyber-1024) plus the Double
+Ratchet, matching Signal's own 2023 upgrade. That wasn't a stretch goal - current libsignal
+*requires* a Kyber prekey to build a `PreKeyBundle` at all, which the implementation discovered
+by actually compiling against the library rather than assuming an older X3DH-only API.
+
+**The server is architecturally incapable of reading messages.** This is the whole point, and
+it drove every design decision below:
+
+- **auth-service** hosts a *public* key-bundle directory only (`device_identity_keys`,
+  `one_time_pre_keys`; `DeviceKeyController` / `DeviceKeyServiceImpl`), reusing the `Device`
+  entity and JWT `deviceId` claim that already existed. It stores identity public keys, signed
+  prekeys, Kyber prekeys, and one-time prekeys - as opaque Base64 byte columns. It deliberately
+  **does not depend on any crypto library** and contains no cryptographic logic, exactly like
+  Signal's own server. Fetching a bundle atomically claims and consumes one one-time prekey
+  (guarded by the platform's existing `RedisDistributedLock`, so two callers racing to start a
+  session with the same device can never be handed the same prekey); when the pool is drained a
+  client still gets a usable signed+Kyber bundle rather than being unable to start a session.
+  A device's identity key is **immutable once published** - re-uploading a different one is
+  rejected with `409 IDENTITY_KEY_MISMATCH` rather than silently accepted, so the
+  "safety number changed" condition can only arise deliberately.
+- **message-service** stores and relays opaque ciphertext. The old `MessageEncryptionService`
+  (one global server-held AES key, explicitly "not end-to-end" in its own javadoc) is gone,
+  replaced by `EncryptedPayloadValidator`, which validates a blob's shape (Base64, size bounds,
+  known cipher type, no duplicate target devices) and has **no key and no decrypt method**.
+- **Encryption is per-device, not per-user.** A real Signal session exists between *devices*, so
+  one logical message arrives as N independently-encrypted `EncryptedEnvelope`s - one per
+  recipient device, including the sender's own other devices so their history syncs. Read paths
+  therefore take the caller's `deviceId` (already in the JWT) and return only that device's
+  envelope; a device that wasn't a recipient gets nulls rather than an error.
+- **Forwarding changed semantics.** It used to copy stored ciphertext across chats, which was
+  only sound because one global key made every ciphertext universally readable. Under
+  per-session ratchet keys that is invalid, so `ForwardMessageRequest` now requires the
+  forwarding client to supply freshly re-encrypted envelopes - which is what WhatsApp/Signal
+  clients actually do.
+
+**Honest downstream consequences.** Real E2E removes capabilities; these were not dropped for
+convenience, they are impossible once the server has no key, and every one is the same tradeoff
+Signal and WhatsApp make:
+
+| Capability | Before | Now |
+|---|---|---|
+| Server-side message-content search | `messages` index in OpenSearch | **Removed.** No `messages` index, no `GET /api/v1/search/messages`. Returns when there is content the server may legitimately read - public channel/broadcast posts (Channels phase). |
+| Automatic AI spam/moderation on every message | `message.sent.v1` consumer in ai-service | **Removed**, replaced by a client-initiated `POST /api/v1/ai/report-message`, where the reporting user's own client attaches the plaintext it already holds. This is how abuse reporting genuinely works on E2E platforms. |
+| Chat-list "last message" text preview | `chats.last_message_preview` column | **Removed** (migration `V3`). Clients render the preview from their own decrypted copy. |
+| `message.sent.v1` payload | carried `contentPreview` | Metadata only (`messageId`, `chatId`, `senderId`, `sentAt`). All four consuming mirrors updated. |
+
+**Scope of this pass:** 1:1 chats. Group E2E (Signal's "Sender Keys") and multi-device history
+backup are queued as follow-ups rather than half-built - see the roadmap below.
+
+**Verification.** The strongest evidence is a test-only reference client
+(`auth-service/src/test/.../e2e/ReferenceE2eClient` + `EndToEndEncryptionTest`) that plays the
+role a phone's crypto layer would, using the real libsignal library and its
+`InMemorySignalProtocolStore`: two independent simulated devices generate their own keys,
+publish only public halves through auth-service's real `DeviceKeyService`, fetch each other's
+bundles, run real PQXDH, and exchange Double-Ratchet-encrypted messages carried as exactly the
+`{cipherType, ciphertext}` pair message-service stores. Six tests cover the happy path,
+ratcheting across a full round trip, out-of-order delivery, an exhausted prekey pool still
+yielding a working session, distinct-prekey-per-fetch, and a third party holding the ciphertext
+(as the server does) being **unable** to decrypt it. One test assertion was initially wrong and
+the library corrected it: a sender keeps emitting type-3 PreKey messages until the recipient
+*replies*, because until then it has no evidence the session was established - real protocol
+behavior the test now models explicitly.
+
+Also verified for real over HTTP against native Postgres/Redis/Kafka: booted auth-service (the
+`V2` migration applied cleanly and passed Hibernate's `ddl-auto=validate`), registered a real
+user, uploaded a bundle (`204`), confirmed the 1568-byte Kyber-1024 and 33-byte identity keys
+persisted correctly in `psql`, drained the prekey pool one distinct key per fetch then got a
+null one-time prekey with the signed+Kyber bundle still intact, and confirmed `401` unauthenticated,
+`403` uploading to another user's device, `200` reading another user's *public* bundle (the point
+of a public directory), and `409` on an identity-key change. Booted message-service to confirm it
+starts with the encryption key config removed, and that the old plaintext `content` body is now
+rejected. **A real bug was found only by running it:** malformed payloads were spending a
+synchronous chat-service network call (and one of the resilience4j bulkhead's limited concurrent
+permits) *before* local validation ran. Validation now happens first, and three tests assert the
+membership check is never reached for an unacceptable payload. MongoDB is unavailable in this
+sandbox, so message-service's persisted read path could not be exercised end to end - the same
+limitation documented for message-service and analytics-service in their own sections.
+
+### Roadmap - queued, not yet built
+
+Tracked so the boundary between what is implemented and what is planned stays unambiguous:
+
+1. **Group E2E via Sender Keys** - extend encryption to group chats (one symmetric ratchet per
+   chat, distributed per member) rather than pairwise sessions.
+2. **Voice & video calling** - a new `call-service`: WebRTC signaling (offer/answer/ICE) over the
+   existing `RedisWebSocketRelay` fan-out pattern, `coturn` for TURN/STUN, call history, and
+   incoming-call push through notification-service's existing generic template mechanism.
+3. **Stories/Status** - a `status-service` with 24h-TTL ephemeral posts, reusing message-service's
+   self-destruct scheduler pattern, view tracking, and fan-out over user-service's existing
+   `Follow` graph.
+4. **Channels** - mostly gap-closing: `Chat.broadcastOnly` is already modeled but unenforced;
+   enforcement belongs in message-service's send-permission check, plus public-channel discovery
+   and (server-readable, therefore searchable) broadcast content in search-service.
+5. **Rich messaging** - polls and stickers as new `MessageType`s. Reactions and disappearing
+   messages already exist and need no new work.
+6. **Bots / mini-app platform** - Telegram-style bot accounts, webhook delivery, inline keyboards.
+7. **Further 2026-2028 candidates** - passkeys/WebAuthn passwordless login; semantic (embeddings)
+   search over the non-E2E content from item 4; digital-wellbeing insights in analytics-service;
+   a DMA-style interoperability adapter. Note that post-quantum key exchange, originally on this
+   list, is **already done** - it came with PQXDH above.

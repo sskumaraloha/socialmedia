@@ -35,9 +35,6 @@ public class Chat extends BaseEntity {
 
     private Instant lastMessageAt;
 
-    @Column(length = 300)
-    private String lastMessagePreview;
-
     protected Chat() {
     }
 
@@ -89,12 +86,9 @@ public class Chat extends BaseEntity {
         return lastMessageAt;
     }
 
-    public String getLastMessagePreview() {
-        return lastMessagePreview;
-    }
-
-    public void recordIncomingMessage(Instant sentAt, String preview) {
+    /** Only the timestamp: a last-message TEXT preview is no longer knowable server-side now
+     * that message content is end-to-end encrypted - see event.incoming.MessageSentEvent. */
+    public void recordIncomingMessage(Instant sentAt) {
         this.lastMessageAt = sentAt;
-        this.lastMessagePreview = preview;
     }
 }

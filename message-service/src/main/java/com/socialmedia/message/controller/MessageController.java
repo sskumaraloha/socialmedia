@@ -7,7 +7,9 @@ import com.socialmedia.message.dto.request.ReactionRequest;
 import com.socialmedia.message.dto.request.SendMessageRequest;
 import com.socialmedia.message.dto.response.DraftResponse;
 import com.socialmedia.message.dto.response.MessageResponse;
+import com.socialmedia.message.service.EncryptedPayloadValidator;
 import com.socialmedia.message.service.MessageService;
+import com.socialmedia.common.security.AuthenticatedPrincipal;
 import com.socialmedia.common.security.CurrentUser;
 import jakarta.validation.Valid;
 import java.time.Instant;
@@ -22,108 +24,127 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Read/write paths pass the caller's deviceId (from the JWT's deviceId claim, already populated
+ * platform-wide by common-library's JwtAuthenticationFilter) down to the service, because under
+ * per-device end-to-end encryption a message's ciphertext is addressed to a device, not a user.
+ */
 @RestController
 public class MessageController {
 
     private final MessageService messageService;
+    private final EncryptedPayloadValidator payloadValidator;
 
-    public MessageController(MessageService messageService) {
+    public MessageController(MessageService messageService, EncryptedPayloadValidator payloadValidator) {
         this.messageService = messageService;
+        this.payloadValidator = payloadValidator;
+    }
+
+    private static AuthenticatedPrincipal caller() {
+        return CurrentUser.get();
     }
 
     @PostMapping("/api/v1/chats/{chatId}/messages")
     @ResponseStatus(HttpStatus.CREATED)
     public MessageResponse sendMessage(@PathVariable UUID chatId, @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody SendMessageRequest request) {
-        return messageService.sendMessage(chatId, CurrentUser.get().userId(), authorization, request);
+        AuthenticatedPrincipal caller = caller();
+        return messageService.sendMessage(chatId, caller.userId(), caller.deviceId(), authorization, request);
     }
 
     @GetMapping("/api/v1/chats/{chatId}/messages")
     public List<MessageResponse> listMessages(@PathVariable UUID chatId, @RequestHeader("Authorization") String authorization,
             @RequestParam(required = false) Instant before, @RequestParam(defaultValue = "50") int limit) {
-        return messageService.listMessages(chatId, CurrentUser.get().userId(), authorization, before, limit);
+        AuthenticatedPrincipal caller = caller();
+        return messageService.listMessages(chatId, caller.userId(), caller.deviceId(), authorization, before, limit);
     }
 
     @GetMapping("/api/v1/messages/{messageId}")
     public MessageResponse getMessage(@PathVariable UUID messageId, @RequestHeader("Authorization") String authorization) {
-        return messageService.getMessage(messageId, CurrentUser.get().userId(), authorization);
+        AuthenticatedPrincipal caller = caller();
+        return messageService.getMessage(messageId, caller.userId(), caller.deviceId(), authorization);
     }
 
     @PatchMapping("/api/v1/messages/{messageId}")
     public MessageResponse editMessage(@PathVariable UUID messageId, @Valid @RequestBody EditMessageRequest request) {
-        return messageService.editMessage(messageId, CurrentUser.get().userId(), request);
+        AuthenticatedPrincipal caller = caller();
+        return messageService.editMessage(messageId, caller.userId(), caller.deviceId(), request);
     }
 
     @DeleteMapping("/api/v1/messages/{messageId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteMessage(@PathVariable UUID messageId, @RequestParam(defaultValue = "false") boolean forEveryone) {
-        messageService.deleteMessage(messageId, CurrentUser.get().userId(), forEveryone);
+        messageService.deleteMessage(messageId, caller().userId(), forEveryone);
     }
 
     @PostMapping("/api/v1/messages/{messageId}/forward")
     @ResponseStatus(HttpStatus.CREATED)
     public MessageResponse forwardMessage(@PathVariable UUID messageId, @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody ForwardMessageRequest request) {
-        return messageService.forwardMessage(messageId, CurrentUser.get().userId(), authorization, request.targetChatId());
+        AuthenticatedPrincipal caller = caller();
+        return messageService.forwardMessage(messageId, caller.userId(), caller.deviceId(), authorization,
+                request.targetChatId(), payloadValidator.validateAndConvert(request.envelopes()));
     }
 
     @PutMapping("/api/v1/messages/{messageId}/reactions")
     public MessageResponse reactToMessage(@PathVariable UUID messageId, @Valid @RequestBody ReactionRequest request) {
-        return messageService.reactToMessage(messageId, CurrentUser.get().userId(), request.emoji());
+        AuthenticatedPrincipal caller = caller();
+        return messageService.reactToMessage(messageId, caller.userId(), caller.deviceId(), request.emoji());
     }
 
     @DeleteMapping("/api/v1/messages/{messageId}/reactions")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void removeReaction(@PathVariable UUID messageId) {
-        messageService.removeReaction(messageId, CurrentUser.get().userId());
+        messageService.removeReaction(messageId, caller().userId());
     }
 
     @PostMapping("/api/v1/messages/{messageId}/delivered")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void markDelivered(@PathVariable UUID messageId) {
-        messageService.markDelivered(messageId, CurrentUser.get().userId());
+        messageService.markDelivered(messageId, caller().userId());
     }
 
     @PostMapping("/api/v1/messages/{messageId}/read")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void markRead(@PathVariable UUID messageId) {
-        messageService.markRead(messageId, CurrentUser.get().userId());
+        messageService.markRead(messageId, caller().userId());
     }
 
     @PutMapping("/api/v1/messages/{messageId}/star")
     public MessageResponse starMessage(@PathVariable UUID messageId) {
-        return messageService.starMessage(messageId, CurrentUser.get().userId());
+        AuthenticatedPrincipal caller = caller();
+        return messageService.starMessage(messageId, caller.userId(), caller.deviceId());
     }
 
     @DeleteMapping("/api/v1/messages/{messageId}/star")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void unstarMessage(@PathVariable UUID messageId) {
-        messageService.unstarMessage(messageId, CurrentUser.get().userId());
+        messageService.unstarMessage(messageId, caller().userId());
     }
 
     @GetMapping("/api/v1/messages/starred")
     public List<MessageResponse> listStarredMessages() {
-        return messageService.listStarredMessages(CurrentUser.get().userId());
+        AuthenticatedPrincipal caller = caller();
+        return messageService.listStarredMessages(caller.userId(), caller.deviceId());
     }
 
     @PutMapping("/api/v1/chats/{chatId}/draft")
     public DraftResponse saveDraft(@PathVariable UUID chatId, @Valid @RequestBody DraftRequest request) {
-        return messageService.saveDraft(chatId, CurrentUser.get().userId(), request);
+        return messageService.saveDraft(chatId, caller().userId(), request);
     }
 
     @GetMapping("/api/v1/chats/{chatId}/draft")
     public DraftResponse getDraft(@PathVariable UUID chatId) {
-        return messageService.getDraft(chatId, CurrentUser.get().userId());
+        return messageService.getDraft(chatId, caller().userId());
     }
 
     @DeleteMapping("/api/v1/chats/{chatId}/draft")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteDraft(@PathVariable UUID chatId) {
-        messageService.deleteDraft(chatId, CurrentUser.get().userId());
+        messageService.deleteDraft(chatId, caller().userId());
     }
 }

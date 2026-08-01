@@ -34,6 +34,11 @@ dependencies {
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("com.redis:testcontainers-redis:2.2.4")
+    // TEST-ONLY, deliberately: the real Signal Protocol library, used by the reference-client
+    // test to play the role a mobile client's crypto layer would. Production code in this
+    // service must never depend on it - auth-service only stores and serves opaque public key
+    // bytes and holds no cryptographic logic, exactly like Signal's own server.
+    testImplementation("org.signal:libsignal-client:0.86.5")
 }
 
 // Unit tests (*Test) need no external services and run under the normal `test` task.

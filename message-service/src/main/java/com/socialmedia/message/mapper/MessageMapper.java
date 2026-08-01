@@ -1,6 +1,7 @@
 package com.socialmedia.message.mapper;
 
 import com.socialmedia.message.domain.Draft;
+import com.socialmedia.message.domain.EncryptedEnvelope;
 import com.socialmedia.message.domain.MediaMetadata;
 import com.socialmedia.message.domain.Message;
 import com.socialmedia.message.dto.response.DraftResponse;
@@ -13,14 +14,18 @@ import org.springframework.stereotype.Component;
 @Component
 public class MessageMapper {
 
-    public MessageResponse toResponse(Message message, String decryptedContent) {
+    /** Projects the message for exactly one requesting device: only that device's ciphertext
+     * envelope is included, since it is the only one that device could decrypt anyway. */
+    public MessageResponse toResponse(Message message, String viewerDeviceId) {
         MediaResponse media = message.getMedia() == null ? null : toMediaResponse(message.getMedia());
+        EncryptedEnvelope envelope = viewerDeviceId == null ? null : message.envelopeFor(viewerDeviceId).orElse(null);
         return new MessageResponse(
                 message.getId(),
                 message.getChatId(),
                 message.getSenderId(),
                 message.getType(),
-                decryptedContent,
+                envelope == null ? null : envelope.getCipherType(),
+                envelope == null ? null : envelope.getCiphertext(),
                 media,
                 message.getReplyToMessageId(),
                 message.getForwardedFromMessageId(),

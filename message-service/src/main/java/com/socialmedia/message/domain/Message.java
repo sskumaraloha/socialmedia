@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.annotation.Id;
@@ -23,8 +24,12 @@ public class Message {
 
     private MessageType type;
 
-    /** Encrypted at rest by MessageEncryptionService before every save - never stored in plaintext. */
-    private String content;
+    /**
+     * One client-encrypted ciphertext per recipient device (see EncryptedEnvelope). This service
+     * holds no key for any of them - unlike the previous server-side-AES design, the plaintext is
+     * genuinely unavailable here, which is what makes the platform end-to-end encrypted.
+     */
+    private List<EncryptedEnvelope> envelopes = new ArrayList<>();
 
     private MediaMetadata media;
 
@@ -62,13 +67,13 @@ public class Message {
     protected Message() {
     }
 
-    public Message(UUID chatId, UUID senderId, MessageType type, String content, MediaMetadata media,
+    public Message(UUID chatId, UUID senderId, MessageType type, List<EncryptedEnvelope> envelopes, MediaMetadata media,
             UUID replyToMessageId, UUID forwardedFromMessageId, Instant scheduledAt, Instant selfDestructAt) {
         this.id = UUID.randomUUID();
         this.chatId = chatId;
         this.senderId = senderId;
         this.type = type;
-        this.content = content;
+        this.envelopes = new ArrayList<>(envelopes);
         this.media = media;
         this.replyToMessageId = replyToMessageId;
         this.forwardedFromMessageId = forwardedFromMessageId;
@@ -96,12 +101,15 @@ public class Message {
         return type;
     }
 
-    public String getContent() {
-        return content;
+    public List<EncryptedEnvelope> getEnvelopes() {
+        return envelopes;
     }
 
-    public void setContent(String content) {
-        this.content = content;
+    /** The ciphertext addressed to one specific device, or empty if this message was never
+     * encrypted for it (e.g. a device that joined the account after the message was sent -
+     * genuinely unreadable by it, and the server cannot re-encrypt to fix that). */
+    public Optional<EncryptedEnvelope> envelopeFor(String deviceId) {
+        return envelopes.stream().filter(e -> e.getRecipientDeviceId().equals(deviceId)).findFirst();
     }
 
     public MediaMetadata getMedia() {
@@ -172,8 +180,8 @@ public class Message {
         this.updatedAt = Instant.now();
     }
 
-    public void edit(String newContent) {
-        this.content = newContent;
+    public void edit(List<EncryptedEnvelope> newEnvelopes) {
+        this.envelopes = new ArrayList<>(newEnvelopes);
         this.edited = true;
         this.editedAt = Instant.now();
         touch();
@@ -182,7 +190,7 @@ public class Message {
     public void deleteForEveryone() {
         this.deletedForEveryone = true;
         this.deletedAt = Instant.now();
-        this.content = null;
+        this.envelopes.clear();
         this.media = null;
         touch();
     }
@@ -225,7 +233,7 @@ public class Message {
 
     public void selfDestruct() {
         this.selfDestructed = true;
-        this.content = null;
+        this.envelopes.clear();
         this.media = null;
         touch();
     }

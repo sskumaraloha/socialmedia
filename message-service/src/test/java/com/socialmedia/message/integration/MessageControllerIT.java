@@ -7,10 +7,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialmedia.message.domain.MessageType;
+import com.socialmedia.message.dto.request.EncryptedEnvelopeRequest;
 import com.socialmedia.message.dto.request.SendMessageRequest;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -83,7 +85,10 @@ class MessageControllerIT {
         UUID chatId = UUID.randomUUID();
         String token = tokenFor(senderId);
 
-        SendMessageRequest request = new SendMessageRequest(MessageType.TEXT, "hello", null, null, null, null);
+        SendMessageRequest request = new SendMessageRequest(MessageType.TEXT,
+                List.of(new EncryptedEnvelopeRequest("recipient-device",
+                        3, Base64.getEncoder().encodeToString("opaque-ciphertext".getBytes()))),
+                null, null, null, null);
 
         // chat-service isn't running in this test, so the synchronous membership check
         // fails closed - proving a message can never be injected into an unverified chat.

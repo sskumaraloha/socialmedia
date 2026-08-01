@@ -20,7 +20,6 @@ public class ChatMapper {
                 chat.getName(),
                 chat.getAvatarUrl(),
                 chat.getLastMessageAt(),
-                chat.getLastMessagePreview(),
                 viewerMembership.getUnreadCount(),
                 viewerMembership.isMuted(),
                 viewerMembership.isArchived(),

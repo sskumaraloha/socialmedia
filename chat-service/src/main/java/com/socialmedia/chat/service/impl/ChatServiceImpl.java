@@ -312,13 +312,13 @@ public class ChatServiceImpl implements ChatService {
     }
 
     @Override
-    public void recordIncomingMessage(UUID chatId, UUID senderId, String contentPreview, Instant sentAt) {
+    public void recordIncomingMessage(UUID chatId, UUID senderId, Instant sentAt) {
         Chat chat = chatRepository.findById(chatId).orElse(null);
         if (chat == null) {
             log.warn("Received message.sent event for unknown chat {}", chatId);
             return;
         }
-        chat.recordIncomingMessage(sentAt, contentPreview);
+        chat.recordIncomingMessage(sentAt);
         chatMemberRepository.incrementUnreadForOthers(chatId, senderId);
 
         List<UUID> recipients = chatMemberRepository.findAllByChatId(chatId).stream()

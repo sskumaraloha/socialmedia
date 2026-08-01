@@ -172,9 +172,9 @@ class ChatServiceImplTest {
                 new ChatMember(chatId, senderId, ChatMemberRole.MEMBER),
                 new ChatMember(chatId, recipientId, ChatMemberRole.MEMBER)));
 
-        service.recordIncomingMessage(chatId, senderId, "Hello there", sentAt);
+        service.recordIncomingMessage(chatId, senderId, sentAt);
 
-        assertThat(chat.getLastMessagePreview()).isEqualTo("Hello there");
+        // Only the timestamp - a content preview is no longer knowable server-side under E2E.
         assertThat(chat.getLastMessageAt()).isEqualTo(sentAt);
         verify(chatMemberRepository).incrementUnreadForOthers(chatId, senderId);
         verify(webSocketNotifier).notifyUsers(eq(List.of(recipientId)), eq("NEW_MESSAGE"), eq(chatId));
@@ -185,7 +185,7 @@ class ChatServiceImplTest {
         UUID chatId = UUID.randomUUID();
         when(chatRepository.findById(chatId)).thenReturn(Optional.empty());
 
-        service.recordIncomingMessage(chatId, UUID.randomUUID(), "preview", Instant.now());
+        service.recordIncomingMessage(chatId, UUID.randomUUID(), Instant.now());
 
         verify(chatMemberRepository, never()).incrementUnreadForOthers(any(), any());
         verify(webSocketNotifier, never()).notifyUsers(anyList(), any(), any());

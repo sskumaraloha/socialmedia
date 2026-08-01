@@ -20,7 +20,8 @@ import com.socialmedia.message.repository.ChatMembershipRepository;
 import com.socialmedia.message.repository.DraftRepository;
 import com.socialmedia.message.repository.MessageRepository;
 import com.socialmedia.message.repository.StarredMessageRepository;
-import com.socialmedia.message.service.MessageEncryptionService;
+import com.socialmedia.message.domain.EncryptedEnvelope;
+import com.socialmedia.message.service.EncryptedPayloadValidator;
 import com.socialmedia.message.service.MessageService;
 import com.socialmedia.message.websocket.MessageWebSocketNotifier;
 import com.socialmedia.common.exception.BusinessException;
@@ -28,6 +29,7 @@ import com.socialmedia.common.exception.ConflictException;
 import com.socialmedia.common.exception.ResourceNotFoundException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -47,28 +49,35 @@ public class MessageServiceImpl implements MessageService {
     private final StarredMessageRepository starredMessageRepository;
     private final ChatMembershipRepository chatMembershipRepository;
     private final ChatMembershipClient chatMembershipClient;
-    private final MessageEncryptionService encryptionService;
+    private final EncryptedPayloadValidator payloadValidator;
     private final MessageEventPublisher eventPublisher;
     private final MessageWebSocketNotifier webSocketNotifier;
     private final MessageMapper mapper;
 
     public MessageServiceImpl(MessageRepository messageRepository, DraftRepository draftRepository,
             StarredMessageRepository starredMessageRepository, ChatMembershipRepository chatMembershipRepository,
-            ChatMembershipClient chatMembershipClient, MessageEncryptionService encryptionService,
+            ChatMembershipClient chatMembershipClient, EncryptedPayloadValidator payloadValidator,
             MessageEventPublisher eventPublisher, MessageWebSocketNotifier webSocketNotifier, MessageMapper mapper) {
         this.messageRepository = messageRepository;
         this.draftRepository = draftRepository;
         this.starredMessageRepository = starredMessageRepository;
         this.chatMembershipRepository = chatMembershipRepository;
         this.chatMembershipClient = chatMembershipClient;
-        this.encryptionService = encryptionService;
+        this.payloadValidator = payloadValidator;
         this.eventPublisher = eventPublisher;
         this.webSocketNotifier = webSocketNotifier;
         this.mapper = mapper;
     }
 
     @Override
-    public MessageResponse sendMessage(UUID chatId, UUID senderId, String bearerToken, SendMessageRequest request) {
+    public MessageResponse sendMessage(UUID chatId, UUID senderId, String senderDeviceId, String bearerToken,
+            SendMessageRequest request) {
+        // Validate the ciphertext envelopes BEFORE the synchronous membership call to
+        // chat-service: this check is local and free, whereas that call is a network round trip
+        // that also consumes one of the resilience4j bulkhead's limited concurrent permits. A
+        // request whose payload can never be accepted should not be allowed to spend either.
+        List<EncryptedEnvelope> envelopes = payloadValidator.validateAndConvert(request.envelopes());
+
         Set<UUID> memberIds = chatMembershipClient.fetchMemberIds(chatId, bearerToken);
 
         if (request.replyToMessageId() != null) {
@@ -84,27 +93,28 @@ public class MessageServiceImpl implements MessageService {
         Instant selfDestructAt = request.selfDestructSeconds() == null ? null
                 : Instant.now().plusSeconds(request.selfDestructSeconds());
 
-        Message message = new Message(chatId, senderId, request.type(), encryptionService.encrypt(request.content()),
+        Message message = new Message(chatId, senderId, request.type(), envelopes,
                 media, request.replyToMessageId(), null, request.scheduledAt(), selfDestructAt);
         messageRepository.save(message);
 
         if (message.isSent()) {
-            eventPublisher.publishMessageSent(message, request.content());
-            notifyNewMessage(message, request.content(), memberIds, senderId);
+            eventPublisher.publishMessageSent(message);
+            notifyNewMessage(message, memberIds, senderId);
         }
 
-        return mapper.toResponse(message, request.content());
+        return mapper.toResponse(message, senderDeviceId);
     }
 
     @Override
-    public MessageResponse getMessage(UUID messageId, UUID viewerId, String bearerToken) {
+    public MessageResponse getMessage(UUID messageId, UUID viewerId, String viewerDeviceId, String bearerToken) {
         Message message = requireVisibleMessage(messageId, viewerId);
         chatMembershipClient.fetchMemberIds(message.getChatId(), bearerToken);
-        return mapper.toResponse(message, encryptionService.decrypt(message.getContent()));
+        return mapper.toResponse(message, viewerDeviceId);
     }
 
     @Override
-    public List<MessageResponse> listMessages(UUID chatId, UUID viewerId, String bearerToken, Instant before, int limit) {
+    public List<MessageResponse> listMessages(UUID chatId, UUID viewerId, String viewerDeviceId, String bearerToken,
+            Instant before, int limit) {
         chatMembershipClient.fetchMemberIds(chatId, bearerToken);
         Pageable page = PageRequest.of(0, Math.max(1, Math.min(limit, 200)));
         List<Message> messages = before == null
@@ -113,23 +123,23 @@ public class MessageServiceImpl implements MessageService {
 
         return messages.stream()
                 .filter(m -> m.isSent() && m.isVisibleTo(viewerId))
-                .map(m -> mapper.toResponse(m, encryptionService.decrypt(m.getContent())))
+                .map(m -> mapper.toResponse(m, viewerDeviceId))
                 .toList();
     }
 
     @Override
-    public MessageResponse editMessage(UUID messageId, UUID requesterId, EditMessageRequest request) {
+    public MessageResponse editMessage(UUID messageId, UUID requesterId, String requesterDeviceId, EditMessageRequest request) {
         Message message = requireVisibleMessage(messageId, requesterId);
         requireAuthor(message, requesterId, "edit");
         if (message.isDeletedForEveryone()) {
             throw new ConflictException("Cannot edit a deleted message");
         }
 
-        message.edit(encryptionService.encrypt(request.content()));
+        message.edit(payloadValidator.validateAndConvert(request.envelopes()));
         messageRepository.save(message);
 
         notifyOthers(message, requesterId, "MESSAGE_EDITED", message.getId());
-        return mapper.toResponse(message, request.content());
+        return mapper.toResponse(message, requesterDeviceId);
     }
 
     @Override
@@ -148,25 +158,28 @@ public class MessageServiceImpl implements MessageService {
     }
 
     @Override
-    public MessageResponse forwardMessage(UUID messageId, UUID requesterId, String bearerToken, UUID targetChatId) {
+    public MessageResponse forwardMessage(UUID messageId, UUID requesterId, String requesterDeviceId, String bearerToken,
+            UUID targetChatId, List<EncryptedEnvelope> reEncryptedEnvelopes) {
         Message original = requireVisibleMessage(messageId, requesterId);
         Set<UUID> targetMemberIds = chatMembershipClient.fetchMemberIds(targetChatId, bearerToken);
 
-        Message forwarded = new Message(targetChatId, requesterId, original.getType(), original.getContent(),
+        // The forwarded copy carries the caller's freshly-encrypted envelopes for the TARGET
+        // chat's devices, never the original's ciphertext - see ForwardMessageRequest for why
+        // copying it across is no longer cryptographically possible.
+        Message forwarded = new Message(targetChatId, requesterId, original.getType(), reEncryptedEnvelopes,
                 original.getMedia(), null, original.getForwardedFromMessageId() != null
                         ? original.getForwardedFromMessageId() : original.getId(),
                 null, null);
         messageRepository.save(forwarded);
 
-        String decrypted = encryptionService.decrypt(original.getContent());
-        eventPublisher.publishMessageSent(forwarded, decrypted);
-        notifyNewMessage(forwarded, decrypted, targetMemberIds, requesterId);
+        eventPublisher.publishMessageSent(forwarded);
+        notifyNewMessage(forwarded, targetMemberIds, requesterId);
 
-        return mapper.toResponse(forwarded, decrypted);
+        return mapper.toResponse(forwarded, requesterDeviceId);
     }
 
     @Override
-    public MessageResponse reactToMessage(UUID messageId, UUID userId, String emoji) {
+    public MessageResponse reactToMessage(UUID messageId, UUID userId, String userDeviceId, String emoji) {
         Message message = requireVisibleMessage(messageId, userId);
         requireLocalMembership(message.getChatId(), userId);
 
@@ -174,7 +187,7 @@ public class MessageServiceImpl implements MessageService {
         messageRepository.save(message);
 
         notifyOthers(message, userId, "REACTION_ADDED", messageId);
-        return mapper.toResponse(message, encryptionService.decrypt(message.getContent()));
+        return mapper.toResponse(message, userDeviceId);
     }
 
     @Override
@@ -203,11 +216,11 @@ public class MessageServiceImpl implements MessageService {
     }
 
     @Override
-    public MessageResponse starMessage(UUID messageId, UUID userId) {
+    public MessageResponse starMessage(UUID messageId, UUID userId, String userDeviceId) {
         Message message = requireVisibleMessage(messageId, userId);
         starredMessageRepository.findByUserIdAndMessageId(userId, messageId)
                 .orElseGet(() -> starredMessageRepository.save(new StarredMessage(userId, messageId)));
-        return mapper.toResponse(message, encryptionService.decrypt(message.getContent()));
+        return mapper.toResponse(message, userDeviceId);
     }
 
     @Override
@@ -216,13 +229,13 @@ public class MessageServiceImpl implements MessageService {
     }
 
     @Override
-    public List<MessageResponse> listStarredMessages(UUID userId) {
+    public List<MessageResponse> listStarredMessages(UUID userId, String userDeviceId) {
         List<UUID> messageIds = starredMessageRepository.findAllByUserIdOrderByStarredAtDesc(userId).stream()
                 .map(StarredMessage::getMessageId)
                 .toList();
         return messageRepository.findAllByIdIn(messageIds).stream()
                 .filter(m -> m.isVisibleTo(userId))
-                .map(m -> mapper.toResponse(m, encryptionService.decrypt(m.getContent())))
+                .map(m -> mapper.toResponse(m, userDeviceId))
                 .toList();
     }
 
@@ -256,11 +269,10 @@ public class MessageServiceImpl implements MessageService {
         for (Message message : due) {
             message.markSent();
             messageRepository.save(message);
-            String decrypted = encryptionService.decrypt(message.getContent());
-            eventPublisher.publishMessageSent(message, decrypted);
+            eventPublisher.publishMessageSent(message);
             List<UUID> members = chatMembershipRepository.findAllByChatId(message.getChatId()).stream()
                     .map(ChatMembership::getUserId).toList();
-            notifyNewMessage(message, decrypted, Set.copyOf(members), message.getSenderId());
+            notifyNewMessage(message, Set.copyOf(members), message.getSenderId());
         }
         if (!due.isEmpty()) {
             log.info("Published {} due scheduled message(s)", due.size());
@@ -303,10 +315,31 @@ public class MessageServiceImpl implements MessageService {
         }
     }
 
-    private void notifyNewMessage(Message message, String decryptedContent, Set<UUID> memberIds, UUID actorId) {
-        MessageResponse response = mapper.toResponse(message, decryptedContent);
+    /**
+     * A WebSocket push is fanned out per user, but ciphertext is per DEVICE - so this cannot
+     * embed any one device's envelope in a shared payload. It instead pushes the full envelope
+     * set and lets each receiving client pick out (and decrypt) the one addressed to it; a
+     * device that finds no envelope for itself simply has nothing to show, exactly as with the
+     * REST read path.
+     */
+    private void notifyNewMessage(Message message, Set<UUID> memberIds, UUID actorId) {
         List<UUID> recipients = memberIds.stream().filter(id -> !id.equals(actorId)).toList();
-        webSocketNotifier.notifyUsers(recipients, "NEW_MESSAGE", response);
+        webSocketNotifier.notifyUsers(recipients, "NEW_MESSAGE", toMultiDevicePayload(message));
+    }
+
+    private Map<String, Object> toMultiDevicePayload(Message message) {
+        return Map.of(
+                "id", message.getId(),
+                "chatId", message.getChatId(),
+                "senderId", message.getSenderId(),
+                "type", message.getType(),
+                "sentAt", message.getCreatedAt(),
+                "envelopes", message.getEnvelopes().stream()
+                        .map(e -> Map.of(
+                                "recipientDeviceId", e.getRecipientDeviceId(),
+                                "cipherType", e.getCipherType(),
+                                "ciphertext", e.getCiphertext()))
+                        .toList());
     }
 
     private void notifyOthers(Message message, UUID actorId, String type, Object payload) {

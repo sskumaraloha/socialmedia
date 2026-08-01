@@ -48,5 +48,5 @@ public interface ChatService {
 
     List<PinnedMessageResponse> listPinnedMessages(UUID chatId, UUID viewerId);
 
-    void recordIncomingMessage(UUID chatId, UUID senderId, String contentPreview, Instant sentAt);
+    void recordIncomingMessage(UUID chatId, UUID senderId, Instant sentAt);
 }
